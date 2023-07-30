@@ -222,11 +222,11 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
     };
 
     // compute fee
-    let mut fee_amount = pool.get_entry_fee(
-        custody.fees.open_position,
+    let mut fee_amount = pool.get_position_fee(
         params.size,
-        locked_amount,
-        collateral_custody,
+        params.side,
+        custody,
+        true
     )?;
     let fee_amount_usd = token_ema_price.get_asset_amount_usd(fee_amount, custody.decimals)?;
     if use_collateral_custody {
@@ -319,11 +319,11 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
             .wrapping_add(size_usd);
 
         if params.side == Side::Long {
-            collateral_custody.trade_stats.oi_long_usd =
-                math::checked_add(collateral_custody.trade_stats.oi_long_usd, size_usd)?;
+            collateral_custody.trade_stats.oi_long =
+                math::checked_add(collateral_custody.trade_stats.oi_long, params.size)?;
         } else {
-            collateral_custody.trade_stats.oi_short_usd =
-                math::checked_add(collateral_custody.trade_stats.oi_short_usd, size_usd)?;
+            collateral_custody.trade_stats.oi_short =
+                math::checked_add(collateral_custody.trade_stats.oi_short, params.size)?;
         }
 
         collateral_custody.add_position(position, &token_ema_price, curtime, None)?;
@@ -336,11 +336,11 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
             .wrapping_add(size_usd);
 
         if params.side == Side::Long {
-            custody.trade_stats.oi_long_usd =
-                math::checked_add(custody.trade_stats.oi_long_usd, size_usd)?;
+            custody.trade_stats.oi_long =
+                math::checked_add(custody.trade_stats.oi_long, params.size)?;
         } else {
-            custody.trade_stats.oi_short_usd =
-                math::checked_add(custody.trade_stats.oi_short_usd, size_usd)?;
+            custody.trade_stats.oi_short =
+                math::checked_add(custody.trade_stats.oi_short, params.size)?;
         }
 
         custody.add_position(

@@ -36,6 +36,16 @@ pub struct Fees {
 }
 
 #[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Default, Debug)]
+pub struct PositionFees {
+    // all values are stored in BPS_DECIMALS
+    pub base_fee: u64,
+    pub adj_fee: u64,
+    pub min_fee: u64,
+    pub max_fee: u64,
+    pub factor: u64
+}
+
+#[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Default, Debug)]
 pub struct FeesStats {
     pub swap_usd: u64,
     pub add_liquidity_usd: u64,
@@ -60,8 +70,8 @@ pub struct TradeStats {
     pub profit_usd: u64,
     pub loss_usd: u64,
     // open interest
-    pub oi_long_usd: u64,
-    pub oi_short_usd: u64,
+    pub oi_long: u64,
+    pub oi_short: u64,
 }
 
 #[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Default, Debug)]
@@ -139,6 +149,7 @@ pub struct Custody {
     pub pricing: PricingParams,
     pub permissions: Permissions,
     pub fees: Fees,
+    pub position_fees: PositionFees,
     pub borrow_rate: BorrowRateParams,
 
     // dynamic variables

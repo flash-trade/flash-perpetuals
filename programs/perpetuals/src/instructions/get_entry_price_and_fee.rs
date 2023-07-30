@@ -149,11 +149,11 @@ pub fn get_entry_price_and_fee(
         curtime,
     )?;
 
-    let mut fee = pool.get_entry_fee(
-        custody.fees.open_position,
+    let mut fee = pool.get_position_fee(
         params.size,
-        locked_amount,
-        collateral_custody,
+        params.side,
+        custody,
+        true
     )?;
 
     if params.side == Side::Short || custody.is_virtual {

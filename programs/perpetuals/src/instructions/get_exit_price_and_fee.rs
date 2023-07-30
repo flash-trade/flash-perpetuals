@@ -106,7 +106,7 @@ pub fn get_exit_price_and_fee(
 
     let size = token_ema_price.get_token_amount(position.size_usd, custody.decimals)?;
 
-    let mut fee = pool.get_exit_fee(size, custody)?;
+    let mut fee = pool.get_position_fee(size, position.side, custody, false)?;
 
     if position.side == Side::Short || custody.is_virtual {
         let fee_amount_usd = token_ema_price.get_asset_amount_usd(fee, custody.decimals)?;

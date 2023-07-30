@@ -264,6 +264,13 @@ pub fn liquidate(ctx: Context<Liquidate>, _params: &LiquidateParams) -> Result<(
             math::checked_sub(collateral_custody.assets.owned, protocol_fee)?;
     }
 
+    // compute position parameters
+    let position_oracle_price = OraclePrice {
+        price: position.price,
+        exponent: -(Perpetuals::PRICE_DECIMALS as i32),
+    };
+    let size = position_oracle_price.get_token_amount(position.size_usd, custody.decimals)?;
+
     // if custody and collateral_custody accounts are the same, ensure that data is in sync
     if position.side == Side::Long && !custody.is_virtual {
         collateral_custody.volume_stats.liquidation_usd = math::checked_add(
@@ -272,15 +279,15 @@ pub fn liquidate(ctx: Context<Liquidate>, _params: &LiquidateParams) -> Result<(
         )?;
 
         if position.side == Side::Long {
-            collateral_custody.trade_stats.oi_long_usd = collateral_custody
+            collateral_custody.trade_stats.oi_long = collateral_custody
                 .trade_stats
-                .oi_long_usd
-                .saturating_sub(position.size_usd);
-        } else {
-            collateral_custody.trade_stats.oi_short_usd = collateral_custody
+                .oi_long
+                .saturating_sub(size);
+        } else { //todo: unreachable code
+            collateral_custody.trade_stats.oi_short = collateral_custody
                 .trade_stats
-                .oi_short_usd
-                .saturating_sub(position.size_usd);
+                .oi_short
+                .saturating_sub(size);
         }
 
         collateral_custody.trade_stats.profit_usd = collateral_custody
@@ -299,16 +306,16 @@ pub fn liquidate(ctx: Context<Liquidate>, _params: &LiquidateParams) -> Result<(
         custody.volume_stats.liquidation_usd =
             math::checked_add(custody.volume_stats.liquidation_usd, position.size_usd)?;
 
-        if position.side == Side::Long {
-            custody.trade_stats.oi_long_usd = custody
+        if position.side == Side::Long { //todo: unreachable code
+            custody.trade_stats.oi_long = custody
                 .trade_stats
-                .oi_long_usd
-                .saturating_sub(position.size_usd);
+                .oi_long
+                .saturating_sub(size);
         } else {
-            custody.trade_stats.oi_short_usd = custody
+            custody.trade_stats.oi_short = custody
                 .trade_stats
-                .oi_short_usd
-                .saturating_sub(position.size_usd);
+                .oi_short
+                .saturating_sub(size);
         }
 
         custody.trade_stats.profit_usd = custody.trade_stats.profit_usd.wrapping_add(profit_usd);

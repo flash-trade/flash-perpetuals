@@ -96,77 +96,77 @@ pub fn upgrade_custody<'info>(
     params: &UpgradeCustodyParams,
 ) -> Result<u8> {
     // validate signatures
-    let mut multisig = ctx.accounts.multisig.load_mut()?;
+    // let mut multisig = ctx.accounts.multisig.load_mut()?;
 
-    let signatures_left = multisig.sign_multisig(
-        &ctx.accounts.admin,
-        &Multisig::get_account_infos(&ctx)[1..],
-        &Multisig::get_instruction_data(AdminInstruction::UpgradeCustody, params)?,
-    )?;
-    if signatures_left > 0 {
-        msg!(
-            "Instruction has been signed but more signatures are required: {}",
-            signatures_left
-        );
-        return Ok(signatures_left);
-    }
+    // let signatures_left = multisig.sign_multisig(
+    //     &ctx.accounts.admin,
+    //     &Multisig::get_account_infos(&ctx)[1..],
+    //     &Multisig::get_instruction_data(AdminInstruction::UpgradeCustody, params)?,
+    // )?;
+    // if signatures_left > 0 {
+    //     msg!(
+    //         "Instruction has been signed but more signatures are required: {}",
+    //         signatures_left
+    //     );
+    //     return Ok(signatures_left);
+    // }
 
-    // load deprecated custody data
-    msg!("Load deprecated custody");
-    let custody_account = &ctx.accounts.custody;
-    if custody_account.owner != &crate::ID {
-        return Err(ProgramError::IllegalOwner.into());
-    }
-    if custody_account.try_data_len()? != DeprecatedCustody::LEN {
-        return Err(ProgramError::InvalidAccountData.into());
-    }
-    let deprecated_custody = Account::<DeprecatedCustody>::try_from_unchecked(custody_account)?;
+    // // load deprecated custody data
+    // msg!("Load deprecated custody");
+    // let custody_account = &ctx.accounts.custody;
+    // if custody_account.owner != &crate::ID {
+    //     return Err(ProgramError::IllegalOwner.into());
+    // }
+    // if custody_account.try_data_len()? != DeprecatedCustody::LEN {
+    //     return Err(ProgramError::InvalidAccountData.into());
+    // }
+    // let deprecated_custody = Account::<DeprecatedCustody>::try_from_unchecked(custody_account)?;
 
-    // update custody data
-    let custody_data = Custody {
-        pool: deprecated_custody.pool,
-        mint: deprecated_custody.mint,
-        token_account: deprecated_custody.token_account,
-        decimals: deprecated_custody.decimals,
-        is_stable: deprecated_custody.is_stable,
-        is_virtual: false,
-        oracle: deprecated_custody.oracle,
-        pricing: deprecated_custody.pricing,
-        permissions: deprecated_custody.permissions,
-        fees: deprecated_custody.fees,
-        borrow_rate: deprecated_custody.borrow_rate,
-        assets: deprecated_custody.assets,
-        collected_fees: deprecated_custody.collected_fees,
-        volume_stats: deprecated_custody.volume_stats,
-        trade_stats: deprecated_custody.trade_stats,
-        long_positions: deprecated_custody.long_positions,
-        short_positions: deprecated_custody.short_positions,
-        borrow_rate_state: deprecated_custody.borrow_rate_state,
-        bump: deprecated_custody.bump,
-        token_account_bump: deprecated_custody.token_account_bump,
-    };
+    // // update custody data
+    // let custody_data = Custody {
+    //     pool: deprecated_custody.pool,
+    //     mint: deprecated_custody.mint,
+    //     token_account: deprecated_custody.token_account,
+    //     decimals: deprecated_custody.decimals,
+    //     is_stable: deprecated_custody.is_stable,
+    //     is_virtual: false,
+    //     oracle: deprecated_custody.oracle,
+    //     pricing: deprecated_custody.pricing,
+    //     permissions: deprecated_custody.permissions,
+    //     fees: deprecated_custody.fees,
+    //     borrow_rate: deprecated_custody.borrow_rate,
+    //     assets: deprecated_custody.assets,
+    //     collected_fees: deprecated_custody.collected_fees,
+    //     volume_stats: deprecated_custody.volume_stats,
+    //     trade_stats: deprecated_custody.trade_stats,
+    //     long_positions: deprecated_custody.long_positions,
+    //     short_positions: deprecated_custody.short_positions,
+    //     borrow_rate_state: deprecated_custody.borrow_rate_state,
+    //     bump: deprecated_custody.bump,
+    //     token_account_bump: deprecated_custody.token_account_bump,
+    // };
 
-    if !custody_data.validate() {
-        return err!(PerpetualsError::InvalidCustodyConfig);
-    }
+    // if !custody_data.validate() {
+    //     return err!(PerpetualsError::InvalidCustodyConfig);
+    // }
 
-    msg!("Resize custody account");
-    Perpetuals::realloc(
-        ctx.accounts.admin.to_account_info(),
-        ctx.accounts.custody.clone(),
-        ctx.accounts.system_program.to_account_info(),
-        Custody::LEN,
-        true,
-    )?;
+    // msg!("Resize custody account");
+    // Perpetuals::realloc(
+    //     ctx.accounts.admin.to_account_info(),
+    //     ctx.accounts.custody.clone(),
+    //     ctx.accounts.system_program.to_account_info(),
+    //     Custody::LEN,
+    //     true,
+    // )?;
 
-    msg!("Re-initialize the custody");
-    if custody_account.try_data_len()? != Custody::LEN {
-        return Err(ProgramError::InvalidAccountData.into());
-    }
-    let mut data = custody_account.try_borrow_mut_data()?;
-    let dst: &mut [u8] = &mut data;
-    let mut writer = BpfWriter::new(dst);
-    custody_data.try_serialize(&mut writer)?;
+    // msg!("Re-initialize the custody");
+    // if custody_account.try_data_len()? != Custody::LEN {
+    //     return Err(ProgramError::InvalidAccountData.into());
+    // }
+    // let mut data = custody_account.try_borrow_mut_data()?;
+    // let dst: &mut [u8] = &mut data;
+    // let mut writer = BpfWriter::new(dst);
+    // custody_data.try_serialize(&mut writer)?;
 
     Ok(0)
 }

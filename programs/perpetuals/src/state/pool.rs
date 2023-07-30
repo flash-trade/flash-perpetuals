@@ -118,59 +118,190 @@ impl Pool {
             .price)
     }
 
-    pub fn get_entry_fee(
+    pub fn get_position_fee(
         &self,
-        base_fee: u64,
         size: u64,
-        locked_amount: u64,
-        collateral_custody: &Custody,
+        side: Side,
+        custody: &Custody,
+        is_entry: bool
     ) -> Result<u64> {
-        // entry_fee = custody.fees.open_position * utilization_fee * size
-        // where utilization_fee = 1 + custody.fees.utilization_mult * (new_utilization - optimal_utilization) / (1 - optimal_utilization);
+        let size_fee; //Self::get_fee_amount(base_fee, size)?;
 
-        let mut size_fee = Self::get_fee_amount(base_fee, size)?;
-
-        let new_utilization = if collateral_custody.assets.owned > 0 {
-            // utilization = (assets_locked + locked_amount) / assets_owned
-            std::cmp::min(
-                Perpetuals::RATE_POWER,
-                math::checked_div(
-                    math::checked_mul(
-                        math::checked_add(collateral_custody.assets.locked, locked_amount)? as u128,
-                        Perpetuals::RATE_POWER,
-                    )?,
-                    collateral_custody.assets.owned as u128,
-                )?,
-            )
+        let use_side = if is_entry {
+            side
         } else {
-            Perpetuals::RATE_POWER
+            if side == Side::Long {
+                Side::Short
+            } else { 
+                Side::Long
+            }
         };
 
-        if new_utilization > collateral_custody.borrow_rate.optimal_utilization as u128 {
-            let utilization_fee = math::checked_add(
-                Perpetuals::BPS_POWER,
-                math::checked_div(
-                    math::checked_mul(
-                        collateral_custody.fees.utilization_mult as u128,
-                        math::checked_sub(
-                            new_utilization,
-                            collateral_custody.borrow_rate.optimal_utilization as u128,
-                        )?,
-                    )?,
-                    math::checked_sub(
-                        Perpetuals::RATE_POWER,
-                        collateral_custody.borrow_rate.optimal_utilization as u128,
-                    )?,
-                )?,
-            )?;
-            size_fee = math::checked_as_u64(math::checked_div(
-                math::checked_mul(size_fee as u128, utilization_fee)?,
-                Perpetuals::BPS_POWER,
-            )?)?;
+        let oi_long_updated = math::checked_add(custody.trade_stats.oi_long, size)?;
+        let oi_short_updated = math::checked_add(custody.trade_stats.oi_short, size)?;
+
+        let oi_short_factor = math::checked_as_u64(math::checked_div(
+            math::checked_mul(
+                oi_short_updated as u128,
+                custody.position_fees.factor as u128
+            )?,
+            Perpetuals::BPS_POWER,
+        )?)?;
+
+        if use_side == Side::Long { 
+            if oi_long_updated > math::checked_div(custody.assets.owned, 10)? { //todo: updated percentage or hardcoded? 
+                if oi_long_updated == oi_short_factor {
+                    size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
+                } else {
+                    let skew = math::checked_div(
+                        math::checked_mul(
+                            oi_short_factor as u128, 
+                            Perpetuals::BPS_POWER
+                        )?, 
+                        oi_long_updated as u128
+                    )?;
+                    
+                    let mut fee:u64;
+                    if skew < Perpetuals::BPS_POWER {
+                        fee = math::checked_as_u64(math::checked_add(
+                            custody.position_fees.base_fee as u128,
+                            math::checked_div(
+                                math::checked_mul(
+                                    custody.position_fees.adj_fee as u128,
+                                    math::checked_sub(Perpetuals::BPS_POWER, skew)?
+                                )?, 
+                                Perpetuals::BPS_POWER
+                            )? 
+                        )?)?;
+                    } else {
+                        fee = math::checked_as_u64(math::checked_add(
+                            custody.position_fees.base_fee as u128,
+                            math::checked_div(
+                                math::checked_mul(
+                                    custody.position_fees.adj_fee as u128,
+                                    math::checked_add(Perpetuals::BPS_POWER, skew)?
+                                )?, 
+                                Perpetuals::BPS_POWER
+                            )?
+                        )?)?;
+                    }
+
+                    if fee < custody.position_fees.min_fee {
+                        fee = custody.position_fees.min_fee;
+                    } else if fee > custody.position_fees.max_fee {
+                        fee = custody.position_fees.max_fee;
+                    }
+                    size_fee = Self::get_fee_amount(fee, size)?;
+                }
+            } else {
+                size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
+            }
+        } else {
+            if oi_short_updated > math::checked_div(custody.assets.owned, 10)? { //todo: updated percentage or hardcoded?
+                if oi_long_updated == oi_short_factor {
+                    size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
+                } else {
+                    let skew = math::checked_div(
+                        math::checked_mul(
+                            oi_long_updated as u128, 
+                            Perpetuals::BPS_POWER
+                        )?, 
+                        oi_short_updated as u128
+                    )?;
+                    
+                    let mut fee:u64;
+                    if skew < Perpetuals::BPS_POWER {
+                        fee = math::checked_as_u64(math::checked_add(
+                            custody.position_fees.base_fee as u128,
+                            math::checked_div(
+                                math::checked_mul(
+                                    custody.position_fees.adj_fee as u128,
+                                    math::checked_sub(Perpetuals::BPS_POWER, skew)?
+                                )?, 
+                                Perpetuals::BPS_POWER
+                            )? 
+                        )?)?;
+                    } else {
+                        fee = math::checked_as_u64(math::checked_add(
+                            custody.position_fees.base_fee as u128,
+                            math::checked_div(
+                                math::checked_mul(
+                                    custody.position_fees.adj_fee as u128,
+                                   math::checked_add(Perpetuals::BPS_POWER, skew)?
+                                )?, 
+                                Perpetuals::BPS_POWER
+                            )?
+                        )?)?;
+                    }
+
+                    if fee < custody.position_fees.min_fee {
+                        fee = custody.position_fees.min_fee;
+                    } else if fee > custody.position_fees.max_fee {
+                        fee = custody.position_fees.max_fee;
+                    }
+                    size_fee = Self::get_fee_amount(fee, size)?;
+                }
+            } else {
+                size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
+            }
         }
 
         Ok(size_fee)
     }
+
+    // pub fn get_entry_fee(
+    //     &self,
+    //     base_fee: u64,
+    //     size: u64,
+    //     locked_amount: u64,
+    //     collateral_custody: &Custody,
+    // ) -> Result<u64> {
+    //     // entry_fee = custody.fees.open_position * utilization_fee * size
+    //     // where utilization_fee = 1 + custody.fees.utilization_mult * (new_utilization - optimal_utilization) / (1 - optimal_utilization);
+
+    //     let mut size_fee = Self::get_fee_amount(base_fee, size)?;
+
+    //     let new_utilization = if collateral_custody.assets.owned > 0 {
+    //         // utilization = (assets_locked + locked_amount) / assets_owned
+    //         std::cmp::min(
+    //             Perpetuals::RATE_POWER,
+    //             math::checked_div(
+    //                 math::checked_mul(
+    //                     math::checked_add(collateral_custody.assets.locked, locked_amount)? as u128,
+    //                     Perpetuals::RATE_POWER,
+    //                 )?,
+    //                 collateral_custody.assets.owned as u128,
+    //             )?,
+    //         )
+    //     } else {
+    //         Perpetuals::RATE_POWER
+    //     };
+
+    //     if new_utilization > collateral_custody.borrow_rate.optimal_utilization as u128 {
+    //         let utilization_fee = math::checked_add(
+    //             Perpetuals::BPS_POWER,
+    //             math::checked_div(
+    //                 math::checked_mul(
+    //                     collateral_custody.fees.utilization_mult as u128,
+    //                     math::checked_sub(
+    //                         new_utilization,
+    //                         collateral_custody.borrow_rate.optimal_utilization as u128,
+    //                     )?,
+    //                 )?,
+    //                 math::checked_sub(
+    //                     Perpetuals::RATE_POWER,
+    //                     collateral_custody.borrow_rate.optimal_utilization as u128,
+    //                 )?,
+    //             )?,
+    //         )?;
+    //         size_fee = math::checked_as_u64(math::checked_div(
+    //             math::checked_mul(size_fee as u128, utilization_fee)?,
+    //             Perpetuals::BPS_POWER,
+    //         )?)?;
+    //     }
+
+    //     Ok(size_fee)
+    // }
 
     pub fn get_exit_price(
         &self,
@@ -199,9 +330,9 @@ impl Pool {
             .price)
     }
 
-    pub fn get_exit_fee(&self, size: u64, custody: &Custody) -> Result<u64> {
-        Self::get_fee_amount(custody.fees.close_position, size)
-    }
+    // pub fn get_exit_fee(&self, size: u64, custody: &Custody) -> Result<u64> {
+    //     Self::get_fee_amount(custody.fees.close_position, size)
+    // }
 
     #[allow(clippy::too_many_arguments)]
     pub fn get_close_amount(
@@ -509,7 +640,7 @@ impl Pool {
         }
 
         let size = token_ema_price.get_token_amount(position.size_usd, custody.decimals)?;
-        let exit_fee_tokens = self.get_exit_fee(size, custody)?;
+        let exit_fee_tokens = self.get_position_fee(size, position.side, custody, false)?;
         let exit_fee_usd =
             token_ema_price.get_asset_amount_usd(exit_fee_tokens, custody.decimals)?;
         let interest_usd = collateral_custody.get_interest_amount_usd(position, curtime)?;
@@ -595,7 +726,7 @@ impl Pool {
         let exit_fee = if liquidation {
             self.get_liquidation_fee(size, custody)?
         } else {
-            self.get_exit_fee(size, custody)?
+            self.get_position_fee(size, position.side, custody, false)?
         };
 
         let exit_fee_usd = token_ema_price.get_asset_amount_usd(exit_fee, custody.decimals)?;
@@ -1252,55 +1383,55 @@ mod test {
 
         assert_eq!(
             0,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 0,
-                custody.get_locked_amount(0, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             1_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 100_000,
-                custody.get_locked_amount(100_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             3_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 150_000,
-                custody.get_locked_amount(150_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             6_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 200_000,
-                custody.get_locked_amount(200_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             9_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 300_000,
-                custody.get_locked_amount(300_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
@@ -1311,44 +1442,44 @@ mod test {
 
         assert_eq!(
             1_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 100_000,
-                custody.get_locked_amount(100_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             2_250,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 150_000,
-                custody.get_locked_amount(150_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             4_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 200_000,
-                custody.get_locked_amount(200_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             6_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 300_000,
-                custody.get_locked_amount(300_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
@@ -1357,44 +1488,44 @@ mod test {
 
         assert_eq!(
             1_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 100_000,
-                custody.get_locked_amount(100_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             1_875,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 150_000,
-                custody.get_locked_amount(150_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             3_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 200_000,
-                custody.get_locked_amount(200_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             4_500,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 300_000,
-                custody.get_locked_amount(300_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
@@ -1404,44 +1535,44 @@ mod test {
 
         assert_eq!(
             1_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 100_000,
-                custody.get_locked_amount(100_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             1_500,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 150_000,
-                custody.get_locked_amount(150_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             2_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 200_000,
-                custody.get_locked_amount(200_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
 
         assert_eq!(
             3_000,
-            pool.get_entry_fee(
-                custody.fees.open_position,
+            pool.get_position_fee(
                 300_000,
-                custody.get_locked_amount(300_000, Side::Long).unwrap(),
-                &custody
+                Side::Long,
+                &custody,
+                true
             )
             .unwrap()
         );
