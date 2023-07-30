@@ -127,18 +127,26 @@ impl Pool {
     ) -> Result<u64> {
         let size_fee; //Self::get_fee_amount(base_fee, size)?;
 
+        let mut oi_long_updated = custody.trade_stats.oi_long;
+        let mut oi_short_updated = custody.trade_stats.oi_short;
+
         let use_side = if is_entry {
-            side
+            if side == Side::Long {
+                oi_long_updated = math::checked_add(custody.trade_stats.oi_long, size)?;
+                Side::Long
+            } else { 
+                oi_short_updated = math::checked_add(custody.trade_stats.oi_short, size)?;
+                Side::Short
+            }
         } else {
             if side == Side::Long {
+                oi_long_updated = math::checked_sub(custody.trade_stats.oi_long, size)?;
                 Side::Short
-            } else { 
+            } else {
+                oi_short_updated = math::checked_sub(custody.trade_stats.oi_short, size)?;
                 Side::Long
             }
         };
-
-        let oi_long_updated = math::checked_add(custody.trade_stats.oi_long, size)?;
-        let oi_short_updated = math::checked_add(custody.trade_stats.oi_short, size)?;
 
         let oi_short_factor = math::checked_as_u64(math::checked_div(
             math::checked_mul(
@@ -149,7 +157,9 @@ impl Pool {
         )?)?;
 
         if use_side == Side::Long { 
-            if oi_long_updated > math::checked_div(custody.assets.owned, 10)? { //todo: updated percentage or hardcoded? 
+            if oi_long_updated > math::checked_as_u64(math::checked_div(
+                math::checked_mul(custody.assets.owned as u128, custody.position_fees.min_utilization as u128)?, 
+                Perpetuals::BPS_POWER)?)? {
                 if oi_long_updated == oi_short_factor {
                     size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
                 } else {
@@ -174,12 +184,12 @@ impl Pool {
                             )? 
                         )?)?;
                     } else {
-                        fee = math::checked_as_u64(math::checked_add(
+                        fee = math::checked_as_u64(math::checked_sub(
                             custody.position_fees.base_fee as u128,
                             math::checked_div(
                                 math::checked_mul(
                                     custody.position_fees.adj_fee as u128,
-                                    math::checked_add(Perpetuals::BPS_POWER, skew)?
+                                    math::checked_sub(skew, Perpetuals::BPS_POWER)?
                                 )?, 
                                 Perpetuals::BPS_POWER
                             )?
@@ -197,7 +207,9 @@ impl Pool {
                 size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
             }
         } else {
-            if oi_short_updated > math::checked_div(custody.assets.owned, 10)? { //todo: updated percentage or hardcoded?
+            if oi_short_updated > math::checked_as_u64(math::checked_div(
+                math::checked_mul(custody.assets.owned as u128, custody.position_fees.min_utilization as u128)?, 
+                Perpetuals::BPS_POWER)?)?  {
                 if oi_long_updated == oi_short_factor {
                     size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
                 } else {
@@ -222,12 +234,12 @@ impl Pool {
                             )? 
                         )?)?;
                     } else {
-                        fee = math::checked_as_u64(math::checked_add(
+                        fee = math::checked_as_u64(math::checked_sub(
                             custody.position_fees.base_fee as u128,
                             math::checked_div(
                                 math::checked_mul(
                                     custody.position_fees.adj_fee as u128,
-                                   math::checked_add(Perpetuals::BPS_POWER, skew)?
+                                   math::checked_sub(skew, Perpetuals::BPS_POWER)?
                                 )?, 
                                 Perpetuals::BPS_POWER
                             )?

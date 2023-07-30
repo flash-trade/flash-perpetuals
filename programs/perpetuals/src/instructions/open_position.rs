@@ -209,8 +209,6 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
         exponent: -(Perpetuals::PRICE_DECIMALS as i32),
     };
     let size_usd = position_oracle_price.get_asset_amount_usd(params.size, custody.decimals)?;
-    let collateral_usd = min_collateral_price
-        .get_asset_amount_usd(params.collateral, collateral_custody.decimals)?;
 
     let locked_amount = if use_collateral_custody {
         custody.get_locked_amount(
@@ -236,8 +234,11 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
     msg!("Collected fee: {}", fee_amount);
 
     // compute amount to transfer
-    let transfer_amount = math::checked_add(params.collateral, fee_amount)?;
-    msg!("Amount in: {}", transfer_amount);
+    let collateral = math::checked_sub(params.collateral, fee_amount)?;
+    msg!("Collateral after fee: {}", collateral);
+
+    let collateral_usd = min_collateral_price
+        .get_asset_amount_usd(collateral, collateral_custody.decimals)?;
 
     // init new position
     msg!("Initialize new position");
@@ -294,7 +295,7 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
             .to_account_info(),
         ctx.accounts.owner.to_account_info(),
         ctx.accounts.token_program.to_account_info(),
-        transfer_amount,
+        params.collateral,
     )?;
 
     // update custody stats

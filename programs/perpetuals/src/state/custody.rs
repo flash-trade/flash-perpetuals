@@ -42,7 +42,8 @@ pub struct PositionFees {
     pub adj_fee: u64,
     pub min_fee: u64,
     pub max_fee: u64,
-    pub factor: u64
+    pub factor: u64,
+    pub min_utilization: u64
 }
 
 #[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Default, Debug)]
