@@ -32,7 +32,10 @@ pub struct OraclePrice {
 #[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Default, Debug)]
 pub struct OracleParams {
     pub oracle_account: Pubkey,
+    pub custom_oracle_account: Pubkey,
     pub oracle_type: OracleType,
+    pub max_difference_threshold: u64,
+    pub max_stable_threshold: u64,
     pub max_price_error: u64,
     pub max_price_age_sec: u32,
 }
@@ -87,26 +90,171 @@ impl OraclePrice {
         oracle_account: &AccountInfo,
         oracle_params: &OracleParams,
         current_time: i64,
-        use_ema: bool,
-    ) -> Result<Self> {
-        match oracle_params.oracle_type {
-            OracleType::Custom => Self::get_custom_price(
+        custom_oracle_account: &AccountInfo,
+        is_stable: bool
+    ) -> Result<(OraclePrice, OraclePrice, bool)> {
+        let (mut min_price, mut max_price);
+        let mut close_only = false;
+        if is_stable {
+            let (curr_price, curr_conf, curr_expo) = Self::get_pyth_price(
                 oracle_account,
                 oracle_params.max_price_error,
                 oracle_params.max_price_age_sec,
                 current_time,
-                use_ema,
-            ),
-            OracleType::Pyth => Self::get_pyth_price(
+                false
+            )?;
+
+            let one_usd = math::checked_pow(10u64, (-curr_expo) as usize)?;
+
+            let perc_diff = Self::get_price_diff(one_usd, curr_price)?;
+
+            (min_price, max_price) = if perc_diff < oracle_params.max_difference_threshold {
+                (
+                    OraclePrice{
+                        price: curr_price,
+                        exponent: curr_expo
+                    }, 
+                    OraclePrice{
+                        price: curr_price,
+                        exponent: curr_expo
+                    },
+                )
+            } else { //todo: when close_only for stable tokens
+                if curr_price < one_usd {
+                    (
+                        OraclePrice{
+                            price: curr_price,
+                            exponent: curr_expo
+                        }, 
+                        OraclePrice{
+                            price: one_usd,
+                            exponent: curr_expo
+                        },
+                    )
+                } else {
+                    (
+                        OraclePrice{
+                            price: one_usd,
+                            exponent: curr_expo
+                        }, 
+                        OraclePrice{
+                            price: curr_price,
+                            exponent: curr_expo
+                        },
+                    )
+                }
+            }
+
+
+        } else {
+            let (curr_price, curr_conf, curr_expo) = Self::get_pyth_price(
                 oracle_account,
                 oracle_params.max_price_error,
                 oracle_params.max_price_age_sec,
                 current_time,
-                use_ema,
-            ),
-            _ => err!(PerpetualsError::UnsupportedOracle),
+                false
+            )?;
+    
+            let (ema_price, _, _) = Self::get_pyth_price(
+                oracle_account,
+                oracle_params.max_price_error,
+                oracle_params.max_price_age_sec,
+                current_time,
+                true
+            )?;
+    
+            if curr_expo <= 0 {
+                msg!("Error: Pyth oracle price is out of bounds");
+                return err!(PerpetualsError::InvalidOraclePrice);
+            }
+    
+            let exponent = curr_expo as u32;
+    
+            let perc_diff = Self::get_price_diff(curr_price, ema_price)?;
+    
+            (min_price, max_price) = if perc_diff < oracle_params.max_difference_threshold {
+                (
+                    OraclePrice{
+                        price: curr_price,
+                        exponent: curr_expo
+                    }, 
+                    OraclePrice{
+                        price: curr_price,
+                        exponent: curr_expo
+                    },
+                )
+            } else {
+                if math::checked_div(
+                    math::checked_mul(curr_conf as u128, Perpetuals::BPS_POWER)?,
+                    curr_price as u128,
+                )? < oracle_params.max_price_error as u128 {
+                    (
+                        OraclePrice{
+                            price: math::checked_sub(curr_price, exponent as u64)?,
+                            exponent: curr_expo
+                        }, 
+                        OraclePrice{
+                            price: math::checked_add(curr_price, exponent as u64)?,
+                            exponent: curr_expo
+                        }
+                    )
+                } else { 
+                    //todo: custom oracle
+                    // Self::get_custom_price(custom_price_info, max_price_error, max_price_age_sec, current_time, use_ema)
+                    close_only = true;
+                    (OraclePrice{price: 0, exponent: 0}, OraclePrice{price: 0, exponent: 0})
+                }
+            };
         }
+        
+        Ok((min_price, max_price, close_only))
     }
+
+    fn get_price_diff(price1: u64, price2: u64) -> Result<u64> {
+
+        let perc_diff = if price1 > price2 {
+            math::checked_as_u64(math::checked_div( 
+                math::checked_mul(
+                    math::checked_sub(price1 as u128, price2 as u128)?, 
+                    Perpetuals::BPS_POWER)?,
+                price1 as u128
+            )?)?
+        } else {
+            math::checked_as_u64(math::checked_div( 
+                math::checked_mul(
+                    math::checked_sub(price1 as u128, price2 as u128)?, 
+                    Perpetuals::BPS_POWER)?,
+                price1 as u128
+            )?)?
+        };
+
+        Ok(perc_diff)
+    }
+
+    // pub fn new_from_oracle(
+    //     oracle_account: &AccountInfo,
+    //     oracle_params: &OracleParams,
+    //     current_time: i64,
+    //     use_ema: bool,
+    // ) -> Result<Self> {
+    //     match oracle_params.oracle_type {
+    //         OracleType::Custom => Self::get_custom_price(
+    //             oracle_account,
+    //             oracle_params.max_price_error,
+    //             oracle_params.max_price_age_sec,
+    //             current_time,
+    //             use_ema,
+    //         ),
+    //         OracleType::Pyth => Self::get_pyth_price(
+    //             oracle_account,
+    //             oracle_params.max_price_error,
+    //             oracle_params.max_price_age_sec,
+    //             current_time,
+    //             use_ema,
+    //         ),
+    //         _ => err!(PerpetualsError::UnsupportedOracle),
+    //     }
+    // }
 
     // Converts token amount to USD with implied USD_DECIMALS decimals using oracle price
     pub fn get_asset_amount_usd(&self, token_amount: u64, token_decimals: u8) -> Result<u64> {
@@ -272,11 +420,11 @@ impl OraclePrice {
 
     fn get_pyth_price(
         pyth_price_info: &AccountInfo,
-        max_price_error: u64,
+        _max_price_error: u64,
         max_price_age_sec: u32,
         current_time: i64,
         use_ema: bool,
-    ) -> Result<OraclePrice> {
+    ) -> Result<(u64, u64, i32)> {
         require!(
             !Perpetuals::is_empty_account(pyth_price_info)?,
             PerpetualsError::InvalidOracleAccount
@@ -295,21 +443,21 @@ impl OraclePrice {
             return err!(PerpetualsError::StaleOraclePrice);
         }
 
-        if pyth_price.price <= 0
-            || math::checked_div(
-                math::checked_mul(pyth_price.conf as u128, Perpetuals::BPS_POWER)?,
-                pyth_price.price as u128,
-            )? > max_price_error as u128
-        {
+        if pyth_price.price <= 0 {
             msg!("Error: Pyth oracle price is out of bounds");
             return err!(PerpetualsError::InvalidOraclePrice);
         }
+        // if pyth_price.price <= 0
+        //     || math::checked_div(
+        //         math::checked_mul(pyth_price.conf as u128, Perpetuals::BPS_POWER)?,
+        //         pyth_price.price as u128,
+        //     )? > max_price_error as u128
+        // {
+        //     msg!("Error: Pyth oracle price is out of bounds");
+        //     return err!(PerpetualsError::InvalidOraclePrice);
+        // }
 
-        Ok(OraclePrice {
-            // price is i64 and > 0 per check above
-            price: pyth_price.price as u64,
-            exponent: pyth_price.expo,
-        })
+        Ok((pyth_price.price as u64, pyth_price.conf, pyth_price.expo))
     }
 }
 

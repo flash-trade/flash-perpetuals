@@ -41,6 +41,11 @@ pub struct GetSwapAmountAndFees<'info> {
     pub receiving_custody_oracle_account: AccountInfo<'info>,
 
     #[account(
+        constraint = receiving_custody_custom_oracle_account.key() == receiving_custody.oracle.custom_oracle_account
+    )]
+    pub receiving_custody_custom_oracle_account: AccountInfo<'info>,
+
+    #[account(
         seeds = [b"custody",
                  pool.key().as_ref(),
                  dispensing_custody.mint.as_ref()],
@@ -53,6 +58,11 @@ pub struct GetSwapAmountAndFees<'info> {
         constraint = dispensing_custody_oracle_account.key() == dispensing_custody.oracle.oracle_account
     )]
     pub dispensing_custody_oracle_account: AccountInfo<'info>,
+
+    #[account(
+        constraint = dispensing_custody_custom_oracle_account.key() == dispensing_custody.oracle.custom_oracle_account
+    )]
+    pub dispensing_custody_custom_oracle_account: AccountInfo<'info>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -82,47 +92,29 @@ pub fn get_swap_amount_and_fees(
     let receiving_custody = &ctx.accounts.receiving_custody;
     let dispensing_custody = &ctx.accounts.dispensing_custody;
 
-    let received_token_price = OraclePrice::new_from_oracle(
+    let (received_token_min_price, received_token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .receiving_custody_oracle_account
             .to_account_info(),
         &receiving_custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.receiving_custody_custom_oracle_account.to_account_info(),
+        receiving_custody.is_stable
     )?;
 
-    let received_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .receiving_custody_oracle_account
-            .to_account_info(),
-        &receiving_custody.oracle,
-        curtime,
-        receiving_custody.pricing.use_ema,
-    )?;
-
-    let dispensed_token_price = OraclePrice::new_from_oracle(
+    let (_dispensed_token_min_price, dispensed_token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .dispensing_custody_oracle_account
             .to_account_info(),
         &dispensing_custody.oracle,
         curtime,
-        false,
-    )?;
-
-    let dispensed_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .dispensing_custody_oracle_account
-            .to_account_info(),
-        &dispensing_custody.oracle,
-        curtime,
-        dispensing_custody.pricing.use_ema,
+        &ctx.accounts.dispensing_custody_custom_oracle_account.to_account_info(),
+        dispensing_custody.is_stable
     )?;
 
     let amount_out = pool.get_swap_amount(
-        &received_token_price,
-        &received_token_ema_price,
-        &dispensed_token_price,
-        &dispensed_token_ema_price,
+        &received_token_min_price,
+        &dispensed_token_max_price,
         receiving_custody,
         dispensing_custody,
         params.amount_in,
@@ -135,9 +127,9 @@ pub fn get_swap_amount_and_fees(
         params.amount_in,
         amount_out,
         receiving_custody,
-        &received_token_price,
+        &received_token_max_price,
         dispensing_custody,
-        &dispensed_token_price,
+        &dispensed_token_max_price,
     )?;
 
     Ok(SwapAmountAndFees {

@@ -79,6 +79,12 @@ pub struct OpenPosition<'info> {
     )]
     pub custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the position token
+    #[account(
+        constraint = custody_oracle_account.key() == custody.oracle.oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
     #[account(
         mut,
         seeds = [b"custody",
@@ -93,6 +99,12 @@ pub struct OpenPosition<'info> {
         constraint = collateral_custody_oracle_account.key() == collateral_custody.oracle.oracle_account
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
+
+    /// CHECK: oracle account for the position token
+    #[account(
+        constraint = custody_oracle_account.key() == custody.oracle.oracle_account
+    )]
+    pub collateral_custody_custom_oracle_account: AccountInfo<'info>,
 
     #[account(
         mut,
@@ -150,43 +162,30 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
     // compute position price
     let curtime = perpetuals.get_time()?;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, token_close_only) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
-    )?;
-
-    let collateral_token_price = OraclePrice::new_from_oracle(
+    let (collateral_token_min_price, collateral_token_max_price, collateral_token_close_only) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .collateral_custody_oracle_account
             .to_account_info(),
         &collateral_custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.collateral_custody_custom_oracle_account.to_account_info(),
+        collateral_custody.is_stable
     )?;
 
-    let collateral_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .collateral_custody_oracle_account
-            .to_account_info(),
-        &collateral_custody.oracle,
-        curtime,
-        collateral_custody.pricing.use_ema,
-    )?;
-
-    let min_collateral_price = collateral_token_price
-        .get_min_price(&collateral_token_ema_price, collateral_custody.is_stable)?;
+    if token_close_only || collateral_token_close_only {
+        return Err(PerpetualsError::InvalidOraclePrice.into())
+    }
 
     let position_price =
-        pool.get_entry_price(&token_price, &token_ema_price, params.side, custody)?;
+        pool.get_entry_price(&token_min_price, &token_max_price, params.side, custody)?;
     msg!("Entry price: {}", position_price);
 
     if params.side == Side::Long {
@@ -212,7 +211,7 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
 
     let locked_amount = if use_collateral_custody {
         custody.get_locked_amount(
-            min_collateral_price.get_token_amount(size_usd, collateral_custody.decimals)?,
+            collateral_token_min_price.get_token_amount(size_usd, collateral_custody.decimals)?,
             params.side,
         )?
     } else {
@@ -220,24 +219,21 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
     };
 
     // compute fee
-    let mut fee_amount = pool.get_position_fee(
-        params.size,
-        params.side,
-        custody,
-        true
-    )?;
-    let fee_amount_usd = token_ema_price.get_asset_amount_usd(fee_amount, custody.decimals)?;
+    let fee_amount_usd = pool.get_entry_fee(size_usd, custody)?;
+
+    let fee_amount;
     if use_collateral_custody {
-        fee_amount = collateral_token_ema_price
-            .get_token_amount(fee_amount_usd, collateral_custody.decimals)?;
-    }
+        fee_amount = collateral_token_min_price.get_token_amount(fee_amount_usd, collateral_custody.decimals)?;
+    } else {
+        fee_amount = token_min_price.get_token_amount(fee_amount_usd, custody.decimals)?;
+    };
     msg!("Collected fee: {}", fee_amount);
 
     // compute amount to transfer
     let collateral = math::checked_sub(params.collateral, fee_amount)?;
     msg!("Collateral after fee: {}", collateral);
 
-    let collateral_usd = min_collateral_price
+    let collateral_usd = collateral_token_min_price
         .get_asset_amount_usd(collateral, collateral_custody.decimals)?;
 
     // init new position
@@ -271,11 +267,11 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
     require!(
         pool.check_leverage(
             position,
-            &token_price,
-            &token_ema_price,
+            &token_min_price,
+            &token_max_price,
             custody,
-            &collateral_token_price,
-            &collateral_token_ema_price,
+            &collateral_token_min_price,
+            &collateral_token_max_price,
             collateral_custody,
             curtime,
             true
@@ -327,7 +323,7 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
                 math::checked_add(collateral_custody.trade_stats.oi_short, params.size)?;
         }
 
-        collateral_custody.add_position(position, &token_ema_price, curtime, None)?;
+        collateral_custody.add_position(position, &token_min_price, curtime, None)?;
         collateral_custody.update_borrow_rate(curtime)?;
         *custody = collateral_custody.clone();
     } else {
@@ -344,12 +340,7 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
                 math::checked_add(custody.trade_stats.oi_short, params.size)?;
         }
 
-        custody.add_position(
-            position,
-            &token_ema_price,
-            curtime,
-            Some(collateral_custody),
-        )?;
+        custody.add_position(position, &token_min_price, curtime, Some(collateral_custody))?;
         collateral_custody.update_borrow_rate(curtime)?;
     }
 

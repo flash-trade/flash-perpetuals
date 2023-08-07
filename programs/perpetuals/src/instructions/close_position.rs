@@ -74,6 +74,12 @@ pub struct ClosePosition<'info> {
     )]
     pub custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the position token
+    #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
     #[account(
         mut,
         constraint = position.collateral_custody == collateral_custody.key()
@@ -85,6 +91,12 @@ pub struct ClosePosition<'info> {
         constraint = collateral_custody_oracle_account.key() == collateral_custody.oracle.oracle_account
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
+
+    /// CHECK: oracle account for the collateral token
+    #[account(
+        constraint = collateral_custody_custom_oracle_account.key() == collateral_custody.oracle.custom_oracle_account
+    )]
+    pub collateral_custody_custom_oracle_account: AccountInfo<'info>,
 
     #[account(
         mut,
@@ -125,39 +137,25 @@ pub fn close_position(ctx: Context<ClosePosition>, params: &ClosePositionParams)
     // compute exit price
     let curtime = perpetuals.get_time()?;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
-    )?;
-
-    let collateral_token_price = OraclePrice::new_from_oracle(
+    let (collateral_token_min_price, collateral_token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .collateral_custody_oracle_account
             .to_account_info(),
         &collateral_custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.collateral_custody_custom_oracle_account.to_account_info(),
+        collateral_custody.is_stable
     )?;
 
-    let collateral_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .collateral_custody_oracle_account
-            .to_account_info(),
-        &collateral_custody.oracle,
-        curtime,
-        collateral_custody.pricing.use_ema,
-    )?;
-
-    let exit_price = pool.get_exit_price(&token_price, &token_ema_price, position.side, custody)?;
+    let exit_price = pool.get_exit_price(&token_min_price, &token_max_price, position.side, custody)?;
     msg!("Exit price: {}", exit_price);
 
     if position.side == Side::Long {
@@ -169,19 +167,19 @@ pub fn close_position(ctx: Context<ClosePosition>, params: &ClosePositionParams)
     msg!("Settle position");
     let (transfer_amount, mut fee_amount, profit_usd, loss_usd) = pool.get_close_amount(
         position,
-        &token_price,
-        &token_ema_price,
+        &token_min_price,
+        &token_max_price,
         custody,
-        &collateral_token_price,
-        &collateral_token_ema_price,
+        &collateral_token_min_price,
+        &collateral_token_max_price,
         collateral_custody,
         curtime,
         false,
     )?;
 
-    let fee_amount_usd = token_ema_price.get_asset_amount_usd(fee_amount, custody.decimals)?;
+    let fee_amount_usd = token_max_price.get_asset_amount_usd(fee_amount, custody.decimals)?;
     if position.side == Side::Short || custody.is_virtual {
-        fee_amount = collateral_token_ema_price
+        fee_amount = collateral_token_min_price
             .get_token_amount(fee_amount_usd, collateral_custody.decimals)?;
     }
 
@@ -262,7 +260,7 @@ pub fn close_position(ctx: Context<ClosePosition>, params: &ClosePositionParams)
                 .trade_stats
                 .oi_long
                 .saturating_sub(size);
-        } else { //todo: unreachable code
+        } else { 
             collateral_custody.trade_stats.oi_short = collateral_custody
                 .trade_stats
                 .oi_short
@@ -287,7 +285,7 @@ pub fn close_position(ctx: Context<ClosePosition>, params: &ClosePositionParams)
             .close_position_usd
             .wrapping_add(position.size_usd);
 
-        if position.side == Side::Long { //todo: unreachable code
+        if position.side == Side::Long {
             custody.trade_stats.oi_long = custody
                 .trade_stats
                 .oi_long

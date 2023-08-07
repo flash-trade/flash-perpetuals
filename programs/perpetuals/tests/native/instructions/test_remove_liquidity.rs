@@ -38,6 +38,7 @@ pub async fn test_remove_liquidity(
 
     let custody_account = utils::get_account::<Custody>(program_test_ctx, custody_pda).await;
     let custody_oracle_account_address = custody_account.oracle.oracle_account;
+    let custody_custom_oracle_account_address = custody_account.oracle.custom_oracle_account;
 
     // Save account state before tx execution
     let owner_receiving_account_before =
@@ -57,6 +58,7 @@ pub async fn test_remove_liquidity(
             pool: *pool_pda,
             custody: custody_pda,
             custody_oracle_account: custody_oracle_account_address,
+            custody_custom_oracle_account: custody_custom_oracle_account_address,
             custody_token_account: custody_token_account_pda,
             lp_token_mint: lp_token_mint_pda,
             token_program: anchor_spl::token::ID,

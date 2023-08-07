@@ -51,6 +51,11 @@ pub struct GetExitPriceAndFee<'info> {
     pub custody_oracle_account: AccountInfo<'info>,
 
     #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
+    #[account(
         seeds = [b"custody",
                  pool.key().as_ref(),
                  collateral_custody.mint.as_ref()],
@@ -63,6 +68,11 @@ pub struct GetExitPriceAndFee<'info> {
         constraint = collateral_custody_oracle_account.key() == collateral_custody.oracle.oracle_account
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
+
+    #[account(
+        constraint = collateral_custody_custom_oracle_account.key() == collateral_custody.oracle.custom_oracle_account
+    )]
+    pub collateral_custody_custom_oracle_account: AccountInfo<'info>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -79,38 +89,31 @@ pub fn get_exit_price_and_fee(
     let custody = &ctx.accounts.custody;
     let collateral_custody = &ctx.accounts.collateral_custody;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
-    )?;
-
-    let collateral_token_ema_price = OraclePrice::new_from_oracle(
+    let (collateral_token_min_price, _, _) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .collateral_custody_oracle_account
             .to_account_info(),
         &collateral_custody.oracle,
         curtime,
-        collateral_custody.pricing.use_ema,
+        &ctx.accounts.collateral_custody_custom_oracle_account.to_account_info(),
+        collateral_custody.is_stable
     )?;
 
-    let price = pool.get_exit_price(&token_price, &token_ema_price, position.side, custody)?;
+    let price = pool.get_exit_price(&token_min_price, &token_max_price, position.side, custody)?;
 
-    let size = token_ema_price.get_token_amount(position.size_usd, custody.decimals)?;
-
-    let mut fee = pool.get_position_fee(size, position.side, custody, false)?;
+    let mut fee = pool.get_exit_fee(position.size_usd, custody)?;
 
     if position.side == Side::Short || custody.is_virtual {
-        let fee_amount_usd = token_ema_price.get_asset_amount_usd(fee, custody.decimals)?;
-        fee = collateral_token_ema_price
+        let fee_amount_usd = token_max_price.get_asset_amount_usd(fee, custody.decimals)?;
+        fee = collateral_token_min_price
             .get_token_amount(fee_amount_usd, collateral_custody.decimals)?;
     }
 

@@ -51,6 +51,11 @@ pub struct GetPnl<'info> {
     pub custody_oracle_account: AccountInfo<'info>,
 
     #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
+    #[account(
         constraint = position.collateral_custody == collateral_custody.key()
     )]
     pub collateral_custody: Box<Account<'info, Custody>>,
@@ -60,6 +65,11 @@ pub struct GetPnl<'info> {
         constraint = collateral_custody_oracle_account.key() == collateral_custody.oracle.oracle_account
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
+
+    #[account(
+        constraint = collateral_custody_custom_oracle_account.key() == collateral_custody.oracle.custom_oracle_account
+    )]
+    pub collateral_custody_custom_oracle_account: AccountInfo<'info>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -73,46 +83,32 @@ pub fn get_pnl(ctx: Context<GetPnl>, _params: &GetPnlParams) -> Result<ProfitAnd
     let custody = &ctx.accounts.custody;
     let collateral_custody = &ctx.accounts.collateral_custody;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
-    )?;
-
-    let collateral_token_price = OraclePrice::new_from_oracle(
+    let (collateral_token_min_price, collateral_token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .collateral_custody_oracle_account
             .to_account_info(),
         &collateral_custody.oracle,
         curtime,
-        false,
-    )?;
-
-    let collateral_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .collateral_custody_oracle_account
-            .to_account_info(),
-        &collateral_custody.oracle,
-        curtime,
-        collateral_custody.pricing.use_ema,
+        &ctx.accounts.collateral_custody_custom_oracle_account.to_account_info(),
+        collateral_custody.is_stable
     )?;
 
     // compute pnl
     let (profit, loss, _) = pool.get_pnl_usd(
         position,
-        &token_price,
-        &token_ema_price,
+        &token_min_price,
+        &token_max_price,
         custody,
-        &collateral_token_price,
-        &collateral_token_ema_price,
+        &collateral_token_min_price,
+        &collateral_token_max_price,
         collateral_custody,
         curtime,
         false,

@@ -41,6 +41,7 @@ pub async fn test_liquidate(
 
     let custody_account = utils::get_account::<Custody>(program_test_ctx, custody_pda).await;
     let custody_oracle_account_address = custody_account.oracle.oracle_account;
+    let custody_custom_oracle_account_address = custody_account.oracle.custom_oracle_account;
 
     // Save account state before tx execution
     let receiving_account_before =
@@ -62,8 +63,10 @@ pub async fn test_liquidate(
             position: *position_pda,
             custody: custody_pda,
             custody_oracle_account: custody_oracle_account_address,
+            custody_custom_oracle_account: custody_custom_oracle_account_address,
             collateral_custody: custody_pda,
             collateral_custody_oracle_account: custody_oracle_account_address,
+            collateral_custody_custom_oracle_account: custody_custom_oracle_account_address,
             collateral_custody_token_account: custody_token_account_pda,
             token_program: anchor_spl::token::ID,
         }

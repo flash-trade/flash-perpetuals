@@ -44,6 +44,12 @@ pub struct GetAddLiquidityAmountAndFee<'info> {
     )]
     pub custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the collateral token
+    #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
     #[account(
         seeds = [b"lp_token_mint",
                  pool.key().as_ref()],
@@ -72,33 +78,22 @@ pub fn get_add_liquidity_amount_and_fee(
     // compute position price
     let curtime = ctx.accounts.perpetuals.get_time()?;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
-    )?;
-
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
     let fee_amount =
-        pool.get_add_liquidity_fee(token_id, params.amount_in, custody, &token_price)?;
+        pool.get_add_liquidity_fee(token_id, params.amount_in, custody, &token_max_price)?;
     let no_fee_amount = math::checked_sub(params.amount_in, fee_amount)?;
 
     let pool_amount_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, true)?;
 
-    let min_price = if token_price < token_ema_price {
-        token_price
-    } else {
-        token_ema_price
-    };
-    let token_amount_usd = min_price.get_asset_amount_usd(no_fee_amount, custody.decimals)?;
+    let token_amount_usd = token_min_price.get_asset_amount_usd(no_fee_amount, custody.decimals)?;
 
     let lp_amount = if pool_amount_usd == 0 {
         token_amount_usd

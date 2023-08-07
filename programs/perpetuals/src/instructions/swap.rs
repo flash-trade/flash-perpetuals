@@ -68,6 +68,11 @@ pub struct Swap<'info> {
     pub receiving_custody_oracle_account: AccountInfo<'info>,
 
     #[account(
+        constraint = receiving_custody_custom_oracle_account.key() == receiving_custody.oracle.custom_oracle_account
+    )]
+    pub receiving_custody_custom_oracle_account: AccountInfo<'info>,
+
+    #[account(
         mut,
         seeds = [b"custody_token_account",
                  pool.key().as_ref(),
@@ -90,6 +95,11 @@ pub struct Swap<'info> {
         constraint = dispensing_custody_oracle_account.key() == dispensing_custody.oracle.oracle_account
     )]
     pub dispensing_custody_oracle_account: AccountInfo<'info>,
+
+    #[account(
+        constraint = dispensing_custody_custom_oracle_account.key() == dispensing_custody.oracle.custom_oracle_account
+    )]
+    pub dispensing_custody_custom_oracle_account: AccountInfo<'info>,
 
     #[account(
         mut,
@@ -137,48 +147,34 @@ pub fn swap(ctx: Context<Swap>, params: &SwapParams) -> Result<()> {
     let token_id_in = pool.get_token_id(&receiving_custody.key())?;
     let token_id_out = pool.get_token_id(&dispensing_custody.key())?;
 
-    let received_token_price = OraclePrice::new_from_oracle(
+    let (received_token_min_price, received_token_max_price, received_token_close_only) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .receiving_custody_oracle_account
             .to_account_info(),
         &receiving_custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.receiving_custody_custom_oracle_account.to_account_info(),
+        receiving_custody.is_stable
     )?;
 
-    let received_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .receiving_custody_oracle_account
-            .to_account_info(),
-        &receiving_custody.oracle,
-        curtime,
-        receiving_custody.pricing.use_ema,
-    )?;
-
-    let dispensed_token_price = OraclePrice::new_from_oracle(
+    let (_dispensed_token_min_price, dispensed_token_max_price, dispensed_token_close_only)  = OraclePrice::new_from_oracle(
         &ctx.accounts
             .dispensing_custody_oracle_account
             .to_account_info(),
         &dispensing_custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.receiving_custody_custom_oracle_account.to_account_info(),
+        dispensing_custody.is_stable
     )?;
 
-    let dispensed_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .dispensing_custody_oracle_account
-            .to_account_info(),
-        &dispensing_custody.oracle,
-        curtime,
-        dispensing_custody.pricing.use_ema,
-    )?;
-
+    if received_token_close_only || dispensed_token_close_only {
+        return Err(PerpetualsError::InvalidOraclePrice.into())
+    }
+    
     msg!("Compute swap amount");
     let amount_out = pool.get_swap_amount(
-        &received_token_price,
-        &received_token_ema_price,
-        &dispensed_token_price,
-        &dispensed_token_ema_price,
+        &received_token_min_price,
+        &dispensed_token_max_price,
         receiving_custody,
         dispensing_custody,
         params.amount_in,
@@ -191,9 +187,9 @@ pub fn swap(ctx: Context<Swap>, params: &SwapParams) -> Result<()> {
         params.amount_in,
         amount_out,
         receiving_custody,
-        &received_token_price,
+        &received_token_max_price,
         dispensing_custody,
-        &dispensed_token_price,
+        &dispensed_token_max_price,
     )?;
     msg!("Collected fees: {} {}", fees.0, fees.1);
 
@@ -219,13 +215,13 @@ pub fn swap(ctx: Context<Swap>, params: &SwapParams) -> Result<()> {
             deposit_amount,
             0,
             receiving_custody,
-            &received_token_price
+            &received_token_max_price
         )? && pool.check_token_ratio(
             token_id_out,
             0,
             withdrawal_amount,
             dispensing_custody,
-            &dispensed_token_price
+            &dispensed_token_max_price
         )?,
         PerpetualsError::TokenRatioOutOfRange
     );
@@ -262,12 +258,12 @@ pub fn swap(ctx: Context<Swap>, params: &SwapParams) -> Result<()> {
     // update custody stats
     msg!("Update custody stats");
     receiving_custody.volume_stats.swap_usd = receiving_custody.volume_stats.swap_usd.wrapping_add(
-        received_token_price.get_asset_amount_usd(params.amount_in, receiving_custody.decimals)?,
+        received_token_max_price.get_asset_amount_usd(params.amount_in, receiving_custody.decimals)?,
     );
 
     receiving_custody.collected_fees.swap_usd =
         receiving_custody.collected_fees.swap_usd.wrapping_add(
-            received_token_price.get_asset_amount_usd(fees.0, receiving_custody.decimals)?,
+            received_token_max_price.get_asset_amount_usd(fees.0, receiving_custody.decimals)?,
         );
 
     receiving_custody.assets.owned =
@@ -278,12 +274,12 @@ pub fn swap(ctx: Context<Swap>, params: &SwapParams) -> Result<()> {
 
     dispensing_custody.collected_fees.swap_usd =
         dispensing_custody.collected_fees.swap_usd.wrapping_add(
-            dispensed_token_price.get_asset_amount_usd(fees.1, dispensing_custody.decimals)?,
+            dispensed_token_max_price.get_asset_amount_usd(fees.1, dispensing_custody.decimals)?,
         );
 
     dispensing_custody.volume_stats.swap_usd =
         dispensing_custody.volume_stats.swap_usd.wrapping_add(
-            dispensed_token_price.get_asset_amount_usd(amount_out, dispensing_custody.decimals)?,
+            dispensed_token_max_price.get_asset_amount_usd(amount_out, dispensing_custody.decimals)?,
         );
 
     dispensing_custody.assets.protocol_fees =

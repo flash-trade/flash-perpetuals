@@ -43,7 +43,7 @@ pub fn update_pool_aum(ctx: Context<UpdatePoolAum>) -> Result<u128> {
     msg!("Previous value: {}", pool.aum_usd);
 
     pool.aum_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::EMA, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, true)?;
 
     msg!("Updated value: {}", pool.aum_usd);
 

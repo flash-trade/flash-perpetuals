@@ -35,8 +35,9 @@ pub fn get_assets_under_management(
     _params: &GetAssetsUnderManagementParams,
 ) -> Result<u128> {
     ctx.accounts.pool.get_assets_under_management_usd(
-        AumCalcMode::EMA,
+        AumCalcMode::Max,
         ctx.remaining_accounts,
         ctx.accounts.perpetuals.get_time()?,
+        true
     )
 }

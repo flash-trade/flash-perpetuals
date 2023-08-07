@@ -81,6 +81,11 @@ pub struct Liquidate<'info> {
     pub custody_oracle_account: AccountInfo<'info>,
 
     #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
+    #[account(
         mut,
         constraint = position.collateral_custody == collateral_custody.key()
     )]
@@ -91,6 +96,11 @@ pub struct Liquidate<'info> {
         constraint = collateral_custody_oracle_account.key() == collateral_custody.oracle.oracle_account
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
+
+    #[account(
+        constraint = collateral_custody_custom_oracle_account.key() == collateral_custody.oracle.custom_oracle_account
+    )]
+    pub collateral_custody_custom_oracle_account: AccountInfo<'info>,
 
     #[account(
         mut,
@@ -125,46 +135,32 @@ pub fn liquidate(ctx: Context<Liquidate>, _params: &LiquidateParams) -> Result<(
     msg!("Check position state");
     let curtime = perpetuals.get_time()?;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
-    )?;
-
-    let collateral_token_price = OraclePrice::new_from_oracle(
+    let (collateral_token_min_price, collateral_token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .collateral_custody_oracle_account
             .to_account_info(),
         &collateral_custody.oracle,
         curtime,
-        false,
-    )?;
-
-    let collateral_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .collateral_custody_oracle_account
-            .to_account_info(),
-        &collateral_custody.oracle,
-        curtime,
-        collateral_custody.pricing.use_ema,
+        &ctx.accounts.collateral_custody_custom_oracle_account.to_account_info(),
+        collateral_custody.is_stable
     )?;
 
     require!(
         !pool.check_leverage(
             position,
-            &token_price,
-            &token_ema_price,
+            &token_min_price,
+            &token_max_price,
             custody,
-            &collateral_token_price,
-            &collateral_token_ema_price,
+            &collateral_token_min_price,
+            &collateral_token_max_price,
             collateral_custody,
             curtime,
             false
@@ -175,29 +171,30 @@ pub fn liquidate(ctx: Context<Liquidate>, _params: &LiquidateParams) -> Result<(
     msg!("Settle position");
     let (total_amount_out, mut fee_amount, profit_usd, loss_usd) = pool.get_close_amount(
         position,
-        &token_price,
-        &token_ema_price,
+        &token_min_price,
+        &token_max_price,
         custody,
-        &collateral_token_price,
-        &collateral_token_ema_price,
+        &collateral_token_min_price,
+        &collateral_token_max_price,
         collateral_custody,
         curtime,
         true,
     )?;
 
-    let fee_amount_usd = token_ema_price.get_asset_amount_usd(fee_amount, custody.decimals)?;
+    let fee_amount_usd = token_max_price.get_asset_amount_usd(fee_amount, custody.decimals)?;
     if position.side == Side::Short || custody.is_virtual {
-        fee_amount = collateral_token_ema_price
+        fee_amount = collateral_token_min_price
             .get_token_amount(fee_amount_usd, collateral_custody.decimals)?;
     }
 
     msg!("Net profit: {}, loss: {}", profit_usd, loss_usd);
     msg!("Collected fee: {}", fee_amount);
 
-    let reward = Pool::get_fee_amount(custody.fees.liquidation, total_amount_out)?;
-    let user_amount = math::checked_sub(total_amount_out, reward)?;
+    let reward_usd = Pool::get_fee_amount(custody.fees.liquidation, position.size_usd)?;
+    let reward = collateral_token_max_price.get_token_amount(reward_usd, collateral_custody.decimals)?;
+    let remaining_amount = math::checked_sub(total_amount_out, reward)?;
 
-    msg!("Amount out: {}", user_amount);
+    msg!("Amount out: {}", remaining_amount);
     msg!("Reward: {}", reward);
 
     // unlock pool funds
@@ -210,17 +207,18 @@ pub fn liquidate(ctx: Context<Liquidate>, _params: &LiquidateParams) -> Result<(
         PerpetualsError::CustodyAmountLimit
     );
 
+    // todo: remaining_amount needs to be trasnferred to fee distribution program
     // transfer tokens
-    msg!("Transfer tokens");
-    perpetuals.transfer_tokens(
-        ctx.accounts
-            .collateral_custody_token_account
-            .to_account_info(),
-        ctx.accounts.receiving_account.to_account_info(),
-        ctx.accounts.transfer_authority.to_account_info(),
-        ctx.accounts.token_program.to_account_info(),
-        user_amount,
-    )?;
+    // msg!("Transfer tokens");
+    // perpetuals.transfer_tokens(
+    //     ctx.accounts
+    //         .collateral_custody_token_account
+    //         .to_account_info(),
+    //     ctx.accounts.receiving_account.to_account_info(),
+    //     ctx.accounts.transfer_authority.to_account_info(),
+    //     ctx.accounts.token_program.to_account_info(),
+    //     remaining_amount,
+    // )?;
 
     perpetuals.transfer_tokens(
         ctx.accounts
@@ -283,7 +281,7 @@ pub fn liquidate(ctx: Context<Liquidate>, _params: &LiquidateParams) -> Result<(
                 .trade_stats
                 .oi_long
                 .saturating_sub(size);
-        } else { //todo: unreachable code
+        } else {
             collateral_custody.trade_stats.oi_short = collateral_custody
                 .trade_stats
                 .oi_short
@@ -306,7 +304,7 @@ pub fn liquidate(ctx: Context<Liquidate>, _params: &LiquidateParams) -> Result<(
         custody.volume_stats.liquidation_usd =
             math::checked_add(custody.volume_stats.liquidation_usd, position.size_usd)?;
 
-        if position.side == Side::Long { //todo: unreachable code
+        if position.side == Side::Long { 
             custody.trade_stats.oi_long = custody
                 .trade_stats
                 .oi_long

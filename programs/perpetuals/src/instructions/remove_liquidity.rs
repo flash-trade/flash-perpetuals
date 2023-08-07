@@ -73,6 +73,11 @@ pub struct RemoveLiquidity<'info> {
     pub custody_oracle_account: AccountInfo<'info>,
 
     #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
+    #[account(
         mut,
         seeds = [b"custody_token_account",
                  pool.key().as_ref(),
@@ -130,30 +135,18 @@ pub fn remove_liquidity(
 
     // Refresh pool.aum_usm to adapt to token price change
     pool.aum_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::EMA, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, false)?;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (_token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
-
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
-    )?;
-
-    let max_price = if token_price > token_ema_price {
-        token_price
-    } else {
-        token_ema_price
-    };
 
     let pool_amount_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::Min, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Min, ctx.remaining_accounts, curtime, false)?;
 
     // compute amount of tokens to return
     let remove_amount_usd = math::checked_as_u64(math::checked_div(
@@ -161,11 +154,11 @@ pub fn remove_liquidity(
         ctx.accounts.lp_token_mint.supply as u128,
     )?)?;
 
-    let remove_amount = max_price.get_token_amount(remove_amount_usd, custody.decimals)?;
+    let remove_amount = token_max_price.get_token_amount(remove_amount_usd, custody.decimals)?;
 
     // calculate fee
     let fee_amount =
-        pool.get_remove_liquidity_fee(token_id, remove_amount, custody, &token_ema_price)?;
+        pool.get_remove_liquidity_fee(token_id, remove_amount, custody, &token_max_price)?;
     msg!("Collected fee: {}", fee_amount);
 
     let transfer_amount = math::checked_sub(remove_amount, fee_amount)?;
@@ -181,7 +174,7 @@ pub fn remove_liquidity(
     let protocol_fee = Pool::get_fee_amount(custody.fees.protocol_share, fee_amount)?;
     let withdrawal_amount = math::checked_add(transfer_amount, protocol_fee)?;
     require!(
-        pool.check_token_ratio(token_id, 0, withdrawal_amount, custody, &token_ema_price)?,
+        pool.check_token_ratio(token_id, 0, withdrawal_amount, custody, &token_max_price)?,
         PerpetualsError::TokenRatioOutOfRange
     );
 
@@ -215,7 +208,7 @@ pub fn remove_liquidity(
     custody.collected_fees.remove_liquidity_usd = custody
         .collected_fees
         .remove_liquidity_usd
-        .wrapping_add(token_ema_price.get_asset_amount_usd(fee_amount, custody.decimals)?);
+        .wrapping_add(token_max_price.get_asset_amount_usd(fee_amount, custody.decimals)?);
 
     custody.volume_stats.remove_liquidity_usd = custody
         .volume_stats
@@ -232,7 +225,7 @@ pub fn remove_liquidity(
     msg!("Update pool stats");
     custody.exit(&crate::ID)?;
     pool.aum_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::EMA, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, false)?;
 
     Ok(())
 }

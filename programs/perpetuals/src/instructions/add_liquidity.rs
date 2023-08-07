@@ -72,6 +72,12 @@ pub struct AddLiquidity<'info> {
     )]
     pub custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the receiving token
+    #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
     #[account(
         mut,
         seeds = [b"custody_token_account",
@@ -93,6 +99,7 @@ pub struct AddLiquidity<'info> {
     // remaining accounts:
     //   pool.tokens.len() custody accounts (read-only, unsigned)
     //   pool.tokens.len() custody oracles (read-only, unsigned)
+    //   pool.tokens.len() custody custom oracles(read-only unsigned)
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -126,30 +133,22 @@ pub fn add_liquidity(ctx: Context<AddLiquidity>, params: &AddLiquidityParams) ->
 
     // Refresh pool.aum_usm to adapt to token price change
     pool.aum_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::EMA, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, true)?;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, token_close_only) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
-    )?;
-
-    let min_price = if token_price < token_ema_price {
-        token_price
-    } else {
-        token_ema_price
-    };
+    if token_close_only {
+        return Err(PerpetualsError::InvalidOraclePrice.into())
+    }
 
     let fee_amount =
-        pool.get_add_liquidity_fee(token_id, params.amount_in, custody, &token_ema_price)?;
+        pool.get_add_liquidity_fee(token_id, params.amount_in, custody, &token_max_price)?;
     msg!("Collected fee: {}", fee_amount);
 
     // check pool constraints
@@ -157,7 +156,7 @@ pub fn add_liquidity(ctx: Context<AddLiquidity>, params: &AddLiquidityParams) ->
     let protocol_fee = Pool::get_fee_amount(custody.fees.protocol_share, fee_amount)?;
     let deposit_amount = math::checked_sub(params.amount_in, protocol_fee)?;
     require!(
-        pool.check_token_ratio(token_id, deposit_amount, 0, custody, &token_ema_price)?,
+        pool.check_token_ratio(token_id, deposit_amount, 0, custody, &token_max_price)?,
         PerpetualsError::TokenRatioOutOfRange
     );
 
@@ -174,7 +173,7 @@ pub fn add_liquidity(ctx: Context<AddLiquidity>, params: &AddLiquidityParams) ->
     // compute assets under management
     msg!("Compute assets under management");
     let pool_amount_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, true)?;
 
     // compute amount of lp tokens to mint
     let no_fee_amount = math::checked_sub(params.amount_in, fee_amount)?;
@@ -184,7 +183,7 @@ pub fn add_liquidity(ctx: Context<AddLiquidity>, params: &AddLiquidityParams) ->
         PerpetualsError::InsufficientAmountReturned
     );
 
-    let token_amount_usd = min_price.get_asset_amount_usd(no_fee_amount, custody.decimals)?;
+    let token_amount_usd = token_min_price.get_asset_amount_usd(no_fee_amount, custody.decimals)?;
 
     let lp_amount = if pool_amount_usd == 0 {
         token_amount_usd
@@ -218,12 +217,12 @@ pub fn add_liquidity(ctx: Context<AddLiquidity>, params: &AddLiquidityParams) ->
     custody.collected_fees.add_liquidity_usd = custody
         .collected_fees
         .add_liquidity_usd
-        .wrapping_add(token_ema_price.get_asset_amount_usd(fee_amount, custody.decimals)?);
+        .wrapping_add(token_max_price.get_asset_amount_usd(fee_amount, custody.decimals)?);
 
     custody.volume_stats.add_liquidity_usd = custody
         .volume_stats
         .add_liquidity_usd
-        .wrapping_add(token_ema_price.get_asset_amount_usd(params.amount_in, custody.decimals)?);
+        .wrapping_add(token_max_price.get_asset_amount_usd(params.amount_in, custody.decimals)?);
 
     custody.assets.protocol_fees = math::checked_add(custody.assets.protocol_fees, protocol_fee)?;
 
@@ -235,7 +234,7 @@ pub fn add_liquidity(ctx: Context<AddLiquidity>, params: &AddLiquidityParams) ->
     msg!("Update pool stats");
     custody.exit(&crate::ID)?;
     pool.aum_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::EMA, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, true)?;
 
     Ok(())
 }

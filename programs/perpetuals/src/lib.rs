@@ -218,7 +218,7 @@ pub mod perpetuals {
     pub fn get_oracle_price(
         ctx: Context<GetOraclePrice>,
         params: GetOraclePriceParams,
-    ) -> Result<u64> {
+    ) -> Result<(u64, u64)> {
         instructions::get_oracle_price(ctx, &params)
     }
 

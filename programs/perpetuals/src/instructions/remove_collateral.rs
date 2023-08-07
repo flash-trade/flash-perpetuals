@@ -76,6 +76,11 @@ pub struct RemoveCollateral<'info> {
     pub custody_oracle_account: AccountInfo<'info>,
 
     #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
+    #[account(
         mut,
         constraint = position.collateral_custody == collateral_custody.key()
     )]
@@ -86,6 +91,11 @@ pub struct RemoveCollateral<'info> {
         constraint = collateral_custody_oracle_account.key() == collateral_custody.oracle.oracle_account
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
+
+    #[account(
+        constraint = collateral_custody_custom_oracle_account.key() == collateral_custody.oracle.custom_oracle_account
+    )]
+    pub collateral_custody_custom_oracle_account: AccountInfo<'info>,
 
     #[account(
         mut,
@@ -126,66 +136,50 @@ pub fn remove_collateral(
         return Err(ProgramError::InvalidArgument.into());
     }
     let pool = ctx.accounts.pool.as_mut();
-    let token_id = pool.get_token_id(&custody.key())?;
+    // let token_id = pool.get_token_id(&custody.key())?;
 
     // compute position price
     let curtime = perpetuals.get_time()?;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, token_close_only) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
-    )?;
-
-    let collateral_token_price = OraclePrice::new_from_oracle(
+    let (collateral_token_min_price, collateral_token_max_price, collateral_token_close_only) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .collateral_custody_oracle_account
             .to_account_info(),
         &collateral_custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.collateral_custody_custom_oracle_account.to_account_info(),
+        collateral_custody.is_stable
     )?;
 
-    let collateral_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .collateral_custody_oracle_account
-            .to_account_info(),
-        &collateral_custody.oracle,
-        curtime,
-        collateral_custody.pricing.use_ema,
-    )?;
-
-    let max_collateral_price = if collateral_token_price > collateral_token_ema_price {
-        collateral_token_price
-    } else {
-        collateral_token_ema_price
-    };
+    if token_close_only || collateral_token_close_only {
+        return Err(PerpetualsError::InvalidOraclePrice.into())
+    }
 
     // compute fee
-    let collateral = max_collateral_price
+    let collateral = collateral_token_max_price
         .get_token_amount(params.collateral_usd, collateral_custody.decimals)?;
-    let fee_amount = pool.get_remove_liquidity_fee(
-        token_id,
-        collateral,
-        collateral_custody,
-        &collateral_token_ema_price,
-    )?;
-    msg!("Collected fee: {}", fee_amount);
+    // let fee_amount = pool.get_remove_liquidity_fee(
+    //     token_id,
+    //     collateral,
+    //     collateral_custody,
+    //     &collateral_token_ema_price,
+    // )?;
+    // msg!("Collected fee: {}", fee_amount);
 
     // compute amount to transfer
     if collateral > position.collateral_amount {
         return Err(ProgramError::InsufficientFunds.into());
     }
-    let transfer_amount = math::checked_sub(collateral, fee_amount)?;
-    msg!("Amount out: {}", transfer_amount);
+    // let transfer_amount = math::checked_sub(collateral, fee_amount)?;
+    // msg!("Amount out: {}", transfer_amount);
 
     // update existing position
     msg!("Update existing position");
@@ -198,11 +192,11 @@ pub fn remove_collateral(
     require!(
         pool.check_leverage(
             position,
-            &token_price,
-            &token_ema_price,
+            &token_min_price,
+            &token_max_price,
             custody,
-            &collateral_token_price,
-            &collateral_token_ema_price,
+            &collateral_token_min_price,
+            &collateral_token_max_price,
             collateral_custody,
             curtime,
             true
@@ -219,25 +213,25 @@ pub fn remove_collateral(
         ctx.accounts.receiving_account.to_account_info(),
         ctx.accounts.transfer_authority.to_account_info(),
         ctx.accounts.token_program.to_account_info(),
-        transfer_amount,
+        collateral,
     )?;
 
     // update custody stats
     msg!("Update custody stats");
-    collateral_custody.collected_fees.open_position_usd = collateral_custody
-        .collected_fees
-        .open_position_usd
-        .wrapping_add(
-            collateral_token_ema_price
-                .get_asset_amount_usd(fee_amount, collateral_custody.decimals)?,
-        );
+    // collateral_custody.collected_fees.open_position_usd = collateral_custody
+    //     .collected_fees
+    //     .open_position_usd
+    //     .wrapping_add(
+    //         collateral_token_ema_price
+    //             .get_asset_amount_usd(fee_amount, collateral_custody.decimals)?,
+    //     );
 
     collateral_custody.assets.collateral =
         math::checked_sub(collateral_custody.assets.collateral, collateral)?;
 
-    let protocol_fee = Pool::get_fee_amount(custody.fees.protocol_share, fee_amount)?;
-    collateral_custody.assets.protocol_fees =
-        math::checked_add(collateral_custody.assets.protocol_fees, protocol_fee)?;
+    // let protocol_fee = Pool::get_fee_amount(custody.fees.protocol_share, fee_amount)?;
+    // collateral_custody.assets.protocol_fees =
+    //     math::checked_add(collateral_custody.assets.protocol_fees, protocol_fee)?;
 
     // if custody and collateral_custody accounts are the same, ensure that data is in sync
     if position.side == Side::Long && !custody.is_virtual {

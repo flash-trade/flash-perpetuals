@@ -72,7 +72,10 @@ pub fn pricing_params_regular(use_ema: bool) -> PricingParams {
 pub fn oracle_params_regular(oracle_account: Pubkey) -> OracleParams {
     OracleParams {
         oracle_account,
+        custom_oracle_account: oracle_account,
         oracle_type: OracleType::Custom,
+        max_difference_threshold: 300,
+        max_stable_threshold: 100,
         max_price_error: 1_000_000,
         max_price_age_sec: 30,
     }

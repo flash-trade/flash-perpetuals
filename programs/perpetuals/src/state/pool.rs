@@ -17,8 +17,6 @@ use {
 pub enum AumCalcMode {
     Min,
     Max,
-    Last,
-    EMA,
 }
 
 #[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Default, Debug)]
@@ -96,14 +94,14 @@ impl Pool {
 
     pub fn get_entry_price(
         &self,
-        token_price: &OraclePrice,
-        token_ema_price: &OraclePrice,
+        min_price: &OraclePrice,
+        max_price: &OraclePrice,
         side: Side,
         custody: &Custody,
     ) -> Result<u64> {
         let price = self.get_price(
-            token_price,
-            token_ema_price,
+            min_price,
+            max_price,
             side,
             if side == Side::Long {
                 custody.pricing.trade_spread_long
@@ -118,147 +116,8 @@ impl Pool {
             .price)
     }
 
-    pub fn get_position_fee(
-        &self,
-        size: u64,
-        side: Side,
-        custody: &Custody,
-        is_entry: bool
-    ) -> Result<u64> {
-        let size_fee; //Self::get_fee_amount(base_fee, size)?;
-
-        let mut oi_long_updated = custody.trade_stats.oi_long;
-        let mut oi_short_updated = custody.trade_stats.oi_short;
-
-        let use_side = if is_entry {
-            if side == Side::Long {
-                oi_long_updated = math::checked_add(custody.trade_stats.oi_long, size)?;
-                Side::Long
-            } else { 
-                oi_short_updated = math::checked_add(custody.trade_stats.oi_short, size)?;
-                Side::Short
-            }
-        } else {
-            if side == Side::Long {
-                oi_long_updated = math::checked_sub(custody.trade_stats.oi_long, size)?;
-                Side::Short
-            } else {
-                oi_short_updated = math::checked_sub(custody.trade_stats.oi_short, size)?;
-                Side::Long
-            }
-        };
-
-        let oi_short_factor = math::checked_as_u64(math::checked_div(
-            math::checked_mul(
-                oi_short_updated as u128,
-                custody.position_fees.factor as u128
-            )?,
-            Perpetuals::BPS_POWER,
-        )?)?;
-
-        if use_side == Side::Long { 
-            if oi_long_updated > math::checked_as_u64(math::checked_div(
-                math::checked_mul(custody.assets.owned as u128, custody.position_fees.min_utilization as u128)?, 
-                Perpetuals::BPS_POWER)?)? {
-                if oi_long_updated == oi_short_factor {
-                    size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
-                } else {
-                    let skew = math::checked_div(
-                        math::checked_mul(
-                            oi_short_factor as u128, 
-                            Perpetuals::BPS_POWER
-                        )?, 
-                        oi_long_updated as u128
-                    )?;
-                    
-                    let mut fee:u64;
-                    if skew < Perpetuals::BPS_POWER {
-                        fee = math::checked_as_u64(math::checked_add(
-                            custody.position_fees.base_fee as u128,
-                            math::checked_div(
-                                math::checked_mul(
-                                    custody.position_fees.adj_fee as u128,
-                                    math::checked_sub(Perpetuals::BPS_POWER, skew)?
-                                )?, 
-                                Perpetuals::BPS_POWER
-                            )? 
-                        )?)?;
-                    } else {
-                        fee = math::checked_as_u64(math::checked_sub(
-                            custody.position_fees.base_fee as u128,
-                            math::checked_div(
-                                math::checked_mul(
-                                    custody.position_fees.adj_fee as u128,
-                                    math::checked_sub(skew, Perpetuals::BPS_POWER)?
-                                )?, 
-                                Perpetuals::BPS_POWER
-                            )?
-                        )?)?;
-                    }
-
-                    if fee < custody.position_fees.min_fee {
-                        fee = custody.position_fees.min_fee;
-                    } else if fee > custody.position_fees.max_fee {
-                        fee = custody.position_fees.max_fee;
-                    }
-                    size_fee = Self::get_fee_amount(fee, size)?;
-                }
-            } else {
-                size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
-            }
-        } else {
-            if oi_short_updated > math::checked_as_u64(math::checked_div(
-                math::checked_mul(custody.assets.owned as u128, custody.position_fees.min_utilization as u128)?, 
-                Perpetuals::BPS_POWER)?)?  {
-                if oi_long_updated == oi_short_factor {
-                    size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
-                } else {
-                    let skew = math::checked_div(
-                        math::checked_mul(
-                            oi_long_updated as u128, 
-                            Perpetuals::BPS_POWER
-                        )?, 
-                        oi_short_updated as u128
-                    )?;
-                    
-                    let mut fee:u64;
-                    if skew < Perpetuals::BPS_POWER {
-                        fee = math::checked_as_u64(math::checked_add(
-                            custody.position_fees.base_fee as u128,
-                            math::checked_div(
-                                math::checked_mul(
-                                    custody.position_fees.adj_fee as u128,
-                                    math::checked_sub(Perpetuals::BPS_POWER, skew)?
-                                )?, 
-                                Perpetuals::BPS_POWER
-                            )? 
-                        )?)?;
-                    } else {
-                        fee = math::checked_as_u64(math::checked_sub(
-                            custody.position_fees.base_fee as u128,
-                            math::checked_div(
-                                math::checked_mul(
-                                    custody.position_fees.adj_fee as u128,
-                                   math::checked_sub(skew, Perpetuals::BPS_POWER)?
-                                )?, 
-                                Perpetuals::BPS_POWER
-                            )?
-                        )?)?;
-                    }
-
-                    if fee < custody.position_fees.min_fee {
-                        fee = custody.position_fees.min_fee;
-                    } else if fee > custody.position_fees.max_fee {
-                        fee = custody.position_fees.max_fee;
-                    }
-                    size_fee = Self::get_fee_amount(fee, size)?;
-                }
-            } else {
-                size_fee = Self::get_fee_amount(custody.position_fees.base_fee, size)?;
-            }
-        }
-
-        Ok(size_fee)
+    pub fn get_entry_fee(&self, size_usd: u64, custody: &Custody) -> Result<u64> {
+        Self::get_fee_amount(custody.fees.open_position, size_usd)
     }
 
     // pub fn get_entry_fee(
@@ -317,14 +176,14 @@ impl Pool {
 
     pub fn get_exit_price(
         &self,
-        token_price: &OraclePrice,
-        token_ema_price: &OraclePrice,
+        min_price: &OraclePrice,
+        max_price: &OraclePrice,
         side: Side,
         custody: &Custody,
     ) -> Result<u64> {
         let price = self.get_price(
-            token_price,
-            token_ema_price,
+            min_price,
+            max_price,
             if side == Side::Long {
                 Side::Short
             } else {
@@ -342,30 +201,30 @@ impl Pool {
             .price)
     }
 
-    // pub fn get_exit_fee(&self, size: u64, custody: &Custody) -> Result<u64> {
-    //     Self::get_fee_amount(custody.fees.close_position, size)
-    // }
+    pub fn get_exit_fee(&self, size_usd: u64, custody: &Custody) -> Result<u64> {
+        Self::get_fee_amount(custody.fees.close_position, size_usd)
+    }
 
     #[allow(clippy::too_many_arguments)]
     pub fn get_close_amount(
         &self,
         position: &Position,
-        token_price: &OraclePrice,
-        token_ema_price: &OraclePrice,
+        token_min_price: &OraclePrice,
+        token_max_price: &OraclePrice,
         custody: &Custody,
-        collateral_token_price: &OraclePrice,
-        collateral_token_ema_price: &OraclePrice,
+        collateral_token_min_price: &OraclePrice,
+        collateral_token_max_price: &OraclePrice,
         collateral_custody: &Custody,
         curtime: i64,
         liquidation: bool,
     ) -> Result<(u64, u64, u64, u64)> {
         let (profit_usd, loss_usd, fee_amount) = self.get_pnl_usd(
             position,
-            token_price,
-            token_ema_price,
+            token_min_price,
+            token_max_price,
             custody,
-            collateral_token_price,
-            collateral_token_ema_price,
+            collateral_token_min_price,
+            collateral_token_max_price,
             collateral_custody,
             curtime,
             liquidation,
@@ -379,12 +238,7 @@ impl Pool {
             0
         };
 
-        let max_collateral_price = if collateral_token_price > collateral_token_ema_price {
-            collateral_token_price
-        } else {
-            collateral_token_ema_price
-        };
-        let close_amount = max_collateral_price
+        let close_amount = collateral_token_max_price
             .get_token_amount(available_amount_usd, collateral_custody.decimals)?;
         let max_amount = math::checked_add(
             position.locked_amount.saturating_sub(fee_amount),
@@ -401,25 +255,12 @@ impl Pool {
 
     pub fn get_swap_price(
         &self,
-        token_in_price: &OraclePrice,
-        token_in_ema_price: &OraclePrice,
-        token_out_price: &OraclePrice,
-        token_out_ema_price: &OraclePrice,
+        token_in_min_price: &OraclePrice,
+        token_out_max_price: &OraclePrice,
         custody_in: &Custody,
     ) -> Result<OraclePrice> {
-        let min_price = if token_in_price < token_in_ema_price {
-            token_in_price
-        } else {
-            token_in_ema_price
-        };
 
-        let max_price = if token_out_price > token_out_ema_price {
-            token_out_price
-        } else {
-            token_out_ema_price
-        };
-
-        let pair_price = min_price.checked_div(max_price)?;
+        let pair_price = token_in_min_price.checked_div(token_out_max_price)?;
 
         self.get_price(
             &pair_price,
@@ -432,19 +273,15 @@ impl Pool {
     #[allow(clippy::too_many_arguments)]
     pub fn get_swap_amount(
         &self,
-        token_in_price: &OraclePrice,
-        token_in_ema_price: &OraclePrice,
-        token_out_price: &OraclePrice,
-        token_out_ema_price: &OraclePrice,
+        token_in_min_price: &OraclePrice,
+        token_out_max_price: &OraclePrice,
         custody_in: &Custody,
         custody_out: &Custody,
         amount_in: u64,
     ) -> Result<u64> {
         let swap_price = self.get_swap_price(
-            token_in_price,
-            token_in_ema_price,
-            token_out_price,
-            token_out_ema_price,
+            token_in_min_price,
+            token_out_max_price,
             custody_in,
         )?;
 
@@ -534,8 +371,8 @@ impl Pool {
         )
     }
 
-    pub fn get_liquidation_fee(&self, size: u64, custody: &Custody) -> Result<u64> {
-        Self::get_fee_amount(custody.fees.liquidation, size)
+    pub fn get_liquidation_fee(&self, size_usd: u64, custody: &Custody) -> Result<u64> {
+        Self::get_fee_amount(custody.fees.liquidation, size_usd)
     }
 
     pub fn check_token_ratio(
@@ -569,21 +406,21 @@ impl Pool {
     pub fn get_leverage(
         &self,
         position: &Position,
-        token_price: &OraclePrice,
-        token_ema_price: &OraclePrice,
+        token_min_price: &OraclePrice,
+        token_max_price: &OraclePrice,
         custody: &Custody,
-        collateral_token_price: &OraclePrice,
-        collateral_token_ema_price: &OraclePrice,
+        collateral_token_min_price: &OraclePrice,
+        collateral_token_max_price: &OraclePrice,
         collateral_custody: &Custody,
         curtime: i64,
     ) -> Result<u64> {
         let (profit_usd, loss_usd, _) = self.get_pnl_usd(
             position,
-            token_price,
-            token_ema_price,
+            token_min_price,
+            token_max_price,
             custody,
-            collateral_token_price,
-            collateral_token_ema_price,
+            collateral_token_min_price,
+            collateral_token_max_price,
             collateral_custody,
             curtime,
             false,
@@ -611,22 +448,22 @@ impl Pool {
     pub fn check_leverage(
         &self,
         position: &Position,
-        token_price: &OraclePrice,
-        token_ema_price: &OraclePrice,
+        token_min_price: &OraclePrice,
+        token_max_price: &OraclePrice,
         custody: &Custody,
-        collateral_token_price: &OraclePrice,
-        collateral_token_ema_price: &OraclePrice,
+        collateral_token_min_price: &OraclePrice,
+        collateral_token_max_price: &OraclePrice,
         collateral_custody: &Custody,
         curtime: i64,
         initial: bool,
     ) -> Result<bool> {
         let current_leverage = self.get_leverage(
             position,
-            token_price,
-            token_ema_price,
+            token_min_price,
+            token_max_price,
             custody,
-            collateral_token_price,
-            collateral_token_ema_price,
+            collateral_token_min_price,
+            collateral_token_max_price,
             collateral_custody,
             curtime,
         )?;
@@ -640,7 +477,7 @@ impl Pool {
     pub fn get_liquidation_price(
         &self,
         position: &Position,
-        token_ema_price: &OraclePrice,
+        token_max_price: &OraclePrice,
         custody: &Custody,
         collateral_custody: &Custody,
         curtime: i64,
@@ -651,10 +488,9 @@ impl Pool {
             return Ok(0);
         }
 
-        let size = token_ema_price.get_token_amount(position.size_usd, custody.decimals)?;
-        let exit_fee_tokens = self.get_position_fee(size, position.side, custody, false)?;
+        let exit_fee_tokens = self.get_liquidation_fee(position.size_usd, custody)?;
         let exit_fee_usd =
-            token_ema_price.get_asset_amount_usd(exit_fee_tokens, custody.decimals)?;
+            token_max_price.get_asset_amount_usd(exit_fee_tokens, custody.decimals)?;
         let interest_usd = collateral_custody.get_interest_amount_usd(position, curtime)?;
         let unrealized_loss_usd = math::checked_add(
             math::checked_add(exit_fee_usd, interest_usd)?,
@@ -717,11 +553,11 @@ impl Pool {
     pub fn get_pnl_usd(
         &self,
         position: &Position,
-        token_price: &OraclePrice,
-        token_ema_price: &OraclePrice,
+        token_min_price: &OraclePrice,
+        token_max_price: &OraclePrice,
         custody: &Custody,
-        collateral_token_price: &OraclePrice,
-        collateral_token_ema_price: &OraclePrice,
+        collateral_token_min_price: &OraclePrice,
+        collateral_token_max_price: &OraclePrice,
         collateral_custody: &Custody,
         curtime: i64,
         liquidation: bool,
@@ -731,17 +567,15 @@ impl Pool {
         }
 
         let exit_price =
-            self.get_exit_price(token_price, token_ema_price, position.side, custody)?;
+            self.get_exit_price(token_min_price, token_max_price, position.side, custody)?;
 
-        let size = token_ema_price.get_token_amount(position.size_usd, custody.decimals)?;
-
-        let exit_fee = if liquidation {
-            self.get_liquidation_fee(size, custody)?
+        let exit_fee_usd = if liquidation {
+            self.get_liquidation_fee(position.size_usd, custody)?
         } else {
-            self.get_position_fee(size, position.side, custody, false)?
+            self.get_exit_fee(position.size_usd, custody)?
         };
 
-        let exit_fee_usd = token_ema_price.get_asset_amount_usd(exit_fee, custody.decimals)?;
+        let exit_fee = token_max_price.get_token_amount(exit_fee_usd, custody.decimals)?;
         let interest_usd = collateral_custody.get_interest_amount_usd(position, curtime)?;
         let unrealized_loss_usd = math::checked_add(
             math::checked_add(exit_fee_usd, interest_usd)?,
@@ -786,8 +620,7 @@ impl Pool {
                         exponent: -(Perpetuals::USD_DECIMALS as i32),
                     }
                 } else {
-                    collateral_token_price
-                        .get_min_price(collateral_token_ema_price, collateral_custody.is_stable)?
+                    *collateral_token_min_price
                 };
                 let max_profit_usd = min_collateral_price
                     .get_asset_amount_usd(position.locked_amount, collateral_custody.decimals)?;
@@ -826,8 +659,7 @@ impl Pool {
                         exponent: -(Perpetuals::USD_DECIMALS as i32),
                     }
                 } else {
-                    collateral_token_price
-                        .get_min_price(collateral_token_ema_price, collateral_custody.is_stable)?
+                    *collateral_token_min_price
                 };
                 let max_profit_usd = min_collateral_price
                     .get_asset_amount_usd(position.locked_amount, collateral_custody.decimals)?;
@@ -845,11 +677,13 @@ impl Pool {
         aum_calc_mode: AumCalcMode,
         accounts: &[AccountInfo],
         curtime: i64,
+        is_add_liquidity: bool
     ) -> Result<u128> {
         let mut pool_amount_usd: u128 = 0;
         for (idx, &custody) in self.custodies.iter().enumerate() {
             let oracle_idx = idx + self.custodies.len();
-            if oracle_idx >= accounts.len() {
+            let custom_oracle_idx = idx + 2 * self.custodies.len();
+            if custom_oracle_idx >= accounts.len() {
                 return Err(ProgramError::NotEnoughAccountKeys.into());
             }
 
@@ -857,37 +691,26 @@ impl Pool {
             let custody = Account::<Custody>::try_from(&accounts[idx])?;
 
             require_keys_eq!(accounts[oracle_idx].key(), custody.oracle.oracle_account);
-
-            let token_price = OraclePrice::new_from_oracle(
+            require_keys_eq!(accounts[custom_oracle_idx].key(), custody.oracle.custom_oracle_account);
+            
+            let (token_min_price, token_max_price, close_only) = OraclePrice::new_from_oracle(
                 &accounts[oracle_idx],
                 &custody.oracle,
                 curtime,
-                false,
+                &accounts[custom_oracle_idx],
+                custody.is_stable
             )?;
 
-            let token_ema_price = OraclePrice::new_from_oracle(
-                &accounts[oracle_idx],
-                &custody.oracle,
-                curtime,
-                custody.pricing.use_ema,
-            )?;
+            if is_add_liquidity && close_only {
+                return Err(PerpetualsError::InvalidOraclePrice.into())
+            }
 
             let aum_token_price = match aum_calc_mode {
-                AumCalcMode::Last => token_price,
-                AumCalcMode::EMA => token_ema_price,
                 AumCalcMode::Min => {
-                    if token_price < token_ema_price {
-                        token_price
-                    } else {
-                        token_ema_price
-                    }
+                    token_min_price
                 }
                 AumCalcMode::Max => {
-                    if token_price > token_ema_price {
-                        token_price
-                    } else {
-                        token_ema_price
-                    }
+                    token_max_price
                 }
             };
 
@@ -912,22 +735,22 @@ impl Pool {
                     // compute aggregate unrealized pnl
                     let (long_profit, long_loss, _) = self.get_pnl_usd(
                         &custody.get_collective_position(Side::Long)?,
-                        &token_price,
-                        &token_ema_price,
+                        &token_min_price,
+                        &token_max_price,
                         &custody,
-                        &token_price,
-                        &token_ema_price,
+                        &token_min_price,
+                        &token_max_price,
                         &custody,
                         curtime,
                         false,
                     )?;
                     let (short_profit, short_loss, _) = self.get_pnl_usd(
                         &custody.get_collective_position(Side::Short)?,
-                        &token_price,
-                        &token_ema_price,
+                        &token_min_price,
+                        &token_max_price,
                         &custody,
-                        &token_price,
-                        &token_ema_price,
+                        &token_min_price,
+                        &token_max_price,
                         &custody,
                         curtime,
                         false,
@@ -1027,17 +850,12 @@ impl Pool {
 
     fn get_price(
         &self,
-        token_price: &OraclePrice,
-        token_ema_price: &OraclePrice,
+        min_price: &OraclePrice,
+        max_price: &OraclePrice,
         side: Side,
         spread: u64,
     ) -> Result<OraclePrice> {
         if side == Side::Long {
-            let max_price = if token_price > token_ema_price {
-                token_price
-            } else {
-                token_ema_price
-            };
 
             Ok(OraclePrice {
                 price: math::checked_add(
@@ -1053,11 +871,6 @@ impl Pool {
                 exponent: max_price.exponent,
             })
         } else {
-            let min_price = if token_price < token_ema_price {
-                token_price
-            } else {
-                token_ema_price
-            };
 
             let spread = math::checked_decimal_mul(
                 min_price.price,
@@ -1192,7 +1005,10 @@ mod test {
 
         let oracle = OracleParams {
             oracle_account: Pubkey::default(),
+            custom_oracle_account: Pubkey::default(),
             oracle_type: OracleType::Custom,
+            max_difference_threshold: 300,
+            max_stable_threshold: 100,
             max_price_error: 100,
             max_price_age_sec: 1,
         };
@@ -1261,11 +1077,11 @@ mod test {
             ..Position::default()
         };
 
-        let token_price = OraclePrice {
+        let token_min_price = OraclePrice {
             price: 25_000_000,
             exponent: -3,
         };
-        let token_ema_price = OraclePrice {
+        let token_max_price = OraclePrice {
             price: 25_300_000,
             exponent: -3,
         };
@@ -1278,8 +1094,8 @@ mod test {
             },
             custody,
             position,
-            token_price,
-            token_ema_price,
+            token_min_price,
+            token_max_price,
         )
     }
 
@@ -1354,7 +1170,7 @@ mod test {
 
     #[test]
     fn test_get_price() {
-        let (pool, custody, _position, token_price, token_ema_price) = get_fixture();
+        let (pool, custody, _position, token_min_price, token_max_price) = get_fixture();
 
         assert_eq!(
             OraclePrice {
@@ -1362,8 +1178,8 @@ mod test {
                 exponent: -3
             },
             pool.get_price(
-                &token_price,
-                &token_ema_price,
+                &token_min_price,
+                &token_max_price,
                 Side::Long,
                 custody.pricing.trade_spread_long,
             )
@@ -1376,8 +1192,8 @@ mod test {
                 exponent: -3
             },
             pool.get_price(
-                &token_price,
-                &token_ema_price,
+                &token_min_price,
+                &token_max_price,
                 Side::Short,
                 custody.pricing.trade_spread_short,
             )
@@ -1395,55 +1211,45 @@ mod test {
 
         assert_eq!(
             0,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 0,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             1_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 100_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             3_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 150_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             6_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 200_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             9_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 300_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
@@ -1454,44 +1260,36 @@ mod test {
 
         assert_eq!(
             1_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 100_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             2_250,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 150_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             4_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 200_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             6_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 300_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
@@ -1500,44 +1298,36 @@ mod test {
 
         assert_eq!(
             1_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 100_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             1_875,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 150_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             3_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 200_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             4_500,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 300_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
@@ -1547,44 +1337,36 @@ mod test {
 
         assert_eq!(
             1_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 100_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             1_500,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 150_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             2_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 200_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );
 
         assert_eq!(
             3_000,
-            pool.get_position_fee(
+            pool.get_entry_fee(
                 300_000,
-                Side::Long,
                 &custody,
-                true
             )
             .unwrap()
         );

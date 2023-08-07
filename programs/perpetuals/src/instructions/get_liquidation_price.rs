@@ -51,6 +51,11 @@ pub struct GetLiquidationPrice<'info> {
     pub custody_oracle_account: AccountInfo<'info>,
 
     #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
+
+    #[account(
         constraint = position.collateral_custody == collateral_custody.key()
     )]
     pub collateral_custody: Box<Account<'info, Custody>>,
@@ -60,6 +65,11 @@ pub struct GetLiquidationPrice<'info> {
         constraint = collateral_custody_oracle_account.key() == collateral_custody.oracle.oracle_account
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
+
+    #[account(
+        constraint = collateral_custody_custom_oracle_account.key() == collateral_custody.oracle.custom_oracle_account
+    )]
+    pub collateral_custody_custom_oracle_account: AccountInfo<'info>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -76,46 +86,39 @@ pub fn get_liquidation_price(
     let collateral_custody = &ctx.accounts.collateral_custody;
     let curtime = ctx.accounts.perpetuals.get_time()?;
 
-    let token_ema_price = OraclePrice::new_from_oracle(
+    let (_token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        custody.pricing.use_ema,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    let collateral_token_price = OraclePrice::new_from_oracle(
+    let (collateral_token_min_price, _collateral_token_max_price,_) = OraclePrice::new_from_oracle(
         &ctx.accounts
             .collateral_custody_oracle_account
             .to_account_info(),
         &collateral_custody.oracle,
         curtime,
-        false,
+        &ctx.accounts.collateral_custody_custom_oracle_account.to_account_info(),
+        collateral_custody.is_stable
     )?;
 
-    let collateral_token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts
-            .collateral_custody_oracle_account
-            .to_account_info(),
-        &collateral_custody.oracle,
-        curtime,
-        collateral_custody.pricing.use_ema,
-    )?;
-
-    let min_collateral_price = collateral_token_price
-        .get_min_price(&collateral_token_ema_price, collateral_custody.is_stable)?;
+    // let min_collateral_price = collateral_token_price
+    //     .get_min_price(&collateral_token_ema_price, collateral_custody.is_stable)?;
 
     let mut position = ctx.accounts.position.clone();
     position.update_time = ctx.accounts.perpetuals.get_time()?;
 
     if params.add_collateral > 0 {
-        let collateral_usd = min_collateral_price
+        let collateral_usd = collateral_token_min_price
             .get_asset_amount_usd(params.add_collateral, collateral_custody.decimals)?;
         position.collateral_usd = math::checked_add(position.collateral_usd, collateral_usd)?;
         position.collateral_amount =
             math::checked_add(position.collateral_amount, params.add_collateral)?;
     }
     if params.remove_collateral > 0 {
-        let collateral_usd = min_collateral_price
+        let collateral_usd = collateral_token_min_price
             .get_asset_amount_usd(params.remove_collateral, collateral_custody.decimals)?;
         if collateral_usd >= position.collateral_usd
             || params.remove_collateral >= position.collateral_amount
@@ -129,7 +132,7 @@ pub fn get_liquidation_price(
 
     ctx.accounts.pool.get_liquidation_price(
         &position,
-        &token_ema_price,
+        &token_max_price,
         custody,
         collateral_custody,
         curtime,

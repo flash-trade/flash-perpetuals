@@ -47,9 +47,10 @@ pub fn get_lp_token_price(
     _params: &GetLpTokenPriceParams,
 ) -> Result<u64> {
     let aum_usd = math::checked_as_u64(ctx.accounts.pool.get_assets_under_management_usd(
-        AumCalcMode::EMA,
+        AumCalcMode::Max,
         ctx.remaining_accounts,
         ctx.accounts.perpetuals.get_time()?,
+        true
     )?)?;
 
     msg!("aum_usd: {}", aum_usd);

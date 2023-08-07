@@ -42,9 +42,13 @@ pub async fn test_swap(
     let dispensing_custody_oracle_account_address =
         dispensing_custody_account.oracle.oracle_account;
 
+    let dispensing_custody_custom_oracle_account_address =
+        dispensing_custody_account.oracle.custom_oracle_account;
+
     let receiving_custody_account =
         utils::get_account::<Custody>(program_test_ctx, receiving_custody_pda).await;
     let receiving_custody_oracle_account_address = receiving_custody_account.oracle.oracle_account;
+    let receiving_custody_custom_oracle_account_address = receiving_custody_account.oracle.custom_oracle_account;
 
     // Save account state before tx execution
     let owner_funding_account_before =
@@ -63,9 +67,11 @@ pub async fn test_swap(
             pool: *pool_pda,
             receiving_custody: receiving_custody_pda,
             receiving_custody_oracle_account: receiving_custody_oracle_account_address,
+            receiving_custody_custom_oracle_account: receiving_custody_custom_oracle_account_address,
             receiving_custody_token_account: receiving_custody_token_account_pda,
             dispensing_custody: dispensing_custody_pda,
             dispensing_custody_oracle_account: dispensing_custody_oracle_account_address,
+            dispensing_custody_custom_oracle_account: dispensing_custody_custom_oracle_account_address,
             dispensing_custody_token_account: dispensing_custody_token_account_pda,
             token_program: anchor_spl::token::ID,
         }

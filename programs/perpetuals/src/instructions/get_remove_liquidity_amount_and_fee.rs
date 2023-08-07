@@ -38,11 +38,16 @@ pub struct GetRemoveLiquidityAmountAndFee<'info> {
     )]
     pub custody: Box<Account<'info, Custody>>,
 
-    /// CHECK: oracle account for the collateral token
     #[account(
         constraint = custody_oracle_account.key() == custody.oracle.oracle_account
     )]
     pub custody_oracle_account: AccountInfo<'info>,
+
+
+    #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
 
     #[account(
         seeds = [b"lp_token_mint",
@@ -72,37 +77,26 @@ pub fn get_remove_liquidity_amount_and_fee(
     // compute position price
     let curtime = ctx.accounts.perpetuals.get_time()?;
 
-    let token_price = OraclePrice::new_from_oracle(
+    let (_token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        false,
-    )?;
-
-    let token_ema_price = OraclePrice::new_from_oracle(
-        &ctx.accounts.custody_oracle_account.to_account_info(),
-        &custody.oracle,
-        curtime,
-        custody.pricing.use_ema,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
     let pool_amount_usd =
-        pool.get_assets_under_management_usd(AumCalcMode::Min, ctx.remaining_accounts, curtime)?;
+        pool.get_assets_under_management_usd(AumCalcMode::Min, ctx.remaining_accounts, curtime, false)?;
 
     let remove_amount_usd = math::checked_as_u64(math::checked_div(
         math::checked_mul(pool_amount_usd, params.lp_amount_in as u128)?,
         ctx.accounts.lp_token_mint.supply as u128,
     )?)?;
 
-    let max_price = if token_price > token_ema_price {
-        token_price
-    } else {
-        token_ema_price
-    };
-    let remove_amount = max_price.get_token_amount(remove_amount_usd, custody.decimals)?;
+    let remove_amount = token_max_price.get_token_amount(remove_amount_usd, custody.decimals)?;
 
     let fee_amount =
-        pool.get_remove_liquidity_fee(token_id, remove_amount, custody, &token_price)?;
+        pool.get_remove_liquidity_fee(token_id, remove_amount, custody, &token_max_price)?;
 
     let transfer_amount = math::checked_sub(remove_amount, fee_amount)?;
 

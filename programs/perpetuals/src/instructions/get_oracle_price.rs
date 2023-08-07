@@ -33,6 +33,11 @@ pub struct GetOraclePrice<'info> {
         constraint = custody_oracle_account.key() == custody.oracle.oracle_account
     )]
     pub custody_oracle_account: AccountInfo<'info>,
+
+    #[account(
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
+    )]
+    pub custody_custom_oracle_account: AccountInfo<'info>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -43,18 +48,20 @@ pub struct GetOraclePriceParams {
 pub fn get_oracle_price(
     ctx: Context<GetOraclePrice>,
     params: &GetOraclePriceParams,
-) -> Result<u64> {
+) -> Result<(u64, u64)> {
     let custody = &ctx.accounts.custody;
     let curtime = ctx.accounts.perpetuals.get_time()?;
 
-    let price = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
-        params.ema,
+        &ctx.accounts.custody_custom_oracle_account.to_account_info(),
+        custody.is_stable
     )?;
 
-    Ok(price
-        .scale_to_exponent(-(Perpetuals::PRICE_DECIMALS as i32))?
-        .price)
+    Ok((
+        token_min_price.scale_to_exponent(-(Perpetuals::PRICE_DECIMALS as i32))?.price, 
+        token_max_price.scale_to_exponent(-(Perpetuals::PRICE_DECIMALS as i32))?.price
+    ))
 }
