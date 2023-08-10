@@ -35,7 +35,6 @@ pub struct OracleParams {
     pub custom_oracle_account: Pubkey,
     pub oracle_type: OracleType,
     pub max_difference_threshold: u64,
-    pub max_stable_threshold: u64,
     pub max_price_error: u64,
     pub max_price_age_sec: u32,
 }
@@ -93,119 +92,100 @@ impl OraclePrice {
         custom_oracle_account: &AccountInfo,
         is_stable: bool
     ) -> Result<(OraclePrice, OraclePrice, bool)> {
-        let (mut min_price, mut max_price);
+        let (min_price, max_price);
         let mut close_only = false;
-        if is_stable {
-            let (curr_price, curr_conf, curr_expo) = Self::get_pyth_price(
-                oracle_account,
-                oracle_params.max_price_error,
-                oracle_params.max_price_age_sec,
-                current_time,
-                false
-            )?;
 
-            let one_usd = math::checked_pow(10u64, (-curr_expo) as usize)?;
+        let (curr_price, curr_conf, curr_expo, is_price_stale) = Self::get_pyth_price(
+            oracle_account,
+            oracle_params.max_price_error,
+            oracle_params.max_price_age_sec,
+            current_time,
+            false
+        )?;
 
-            let perc_diff = Self::get_price_diff(one_usd, curr_price)?;
+        if !is_price_stale {
+            if is_stable {
 
-            (min_price, max_price) = if perc_diff < oracle_params.max_difference_threshold {
-                (
-                    OraclePrice{
-                        price: curr_price,
-                        exponent: curr_expo
-                    }, 
-                    OraclePrice{
-                        price: curr_price,
-                        exponent: curr_expo
-                    },
-                )
-            } else { //todo: when close_only for stable tokens
-                if curr_price < one_usd {
+                let one_usd = math::checked_pow(10u64, (-curr_expo) as usize)?;
+    
+                let perc_diff = Self::get_price_diff(one_usd, curr_price)?;
+    
+                (min_price, max_price) = if perc_diff < oracle_params.max_difference_threshold {
                     (
-                        OraclePrice{
-                            price: curr_price,
-                            exponent: curr_expo
-                        }, 
-                        OraclePrice{
-                            price: one_usd,
-                            exponent: curr_expo
-                        },
+                        OraclePrice{price: curr_price, exponent: curr_expo}, 
+                        OraclePrice{price: curr_price, exponent: curr_expo},
                     )
                 } else {
-                    (
-                        OraclePrice{
-                            price: one_usd,
-                            exponent: curr_expo
-                        }, 
-                        OraclePrice{
-                            price: curr_price,
-                            exponent: curr_expo
-                        },
-                    )
+                    if curr_price < one_usd {
+                        (
+                            OraclePrice{price: curr_price, exponent: curr_expo}, 
+                            OraclePrice{price: one_usd, exponent: curr_expo},
+                        )
+                    } else {
+                        (
+                            OraclePrice{price: one_usd, exponent: curr_expo}, 
+                            OraclePrice{price: curr_price, exponent: curr_expo},
+                        )
+                    }
                 }
+
+            } else {
+        
+                let (ema_price, _, _, _) = Self::get_pyth_price(
+                    oracle_account,
+                    oracle_params.max_price_error,
+                    oracle_params.max_price_age_sec,
+                    current_time,
+                    true
+                )?;
+        
+                let perc_diff = Self::get_price_diff(curr_price, ema_price)?;
+        
+                (min_price, max_price) = if perc_diff < oracle_params.max_difference_threshold {
+                    (  
+                        OraclePrice{price: curr_price, exponent: curr_expo}, 
+                        OraclePrice{price: curr_price, exponent: curr_expo},
+                    )
+                } else {
+                    if math::checked_div(
+                        math::checked_mul(curr_conf as u128, Perpetuals::BPS_POWER)?,
+                        curr_price as u128,
+                    )? < oracle_params.max_price_error as u128 {
+                        (
+                            OraclePrice{price: math::checked_sub(curr_price, curr_conf)?, exponent: curr_expo}, 
+                            OraclePrice{price: math::checked_add(curr_price, curr_conf)?, exponent: curr_expo}
+                        )
+                    } else { 
+                        
+                        close_only = true;
+                        if oracle_params.oracle_type == OracleType::Custom {
+                            //todo: custom oracle
+                            // Self::get_custom_price(custom_price_info, max_price_error, max_price_age_sec, current_time, use_ema)
+                            msg!("Custom Oracle not set");
+                            return err!(PerpetualsError::InvalidOraclePrice);
+                        } else {
+                            (
+                                OraclePrice{price: math::checked_sub(curr_price, curr_conf)?, exponent: curr_expo}, 
+                                OraclePrice{price: math::checked_add(curr_price, curr_conf)?, exponent: curr_expo}
+                            )
+                        }
+                    }
+                };
             }
-
-
         } else {
-            let (curr_price, curr_conf, curr_expo) = Self::get_pyth_price(
-                oracle_account,
-                oracle_params.max_price_error,
-                oracle_params.max_price_age_sec,
-                current_time,
-                false
-            )?;
-    
-            let (ema_price, _, _) = Self::get_pyth_price(
-                oracle_account,
-                oracle_params.max_price_error,
-                oracle_params.max_price_age_sec,
-                current_time,
-                true
-            )?;
-    
-            if curr_expo <= 0 {
-                msg!("Error: Pyth oracle price is out of bounds");
+            close_only = true;
+            if oracle_params.oracle_type == OracleType::Custom {
+                //todo: custom oracle
+                // Self::get_custom_price(custom_price_info, max_price_error, max_price_age_sec, current_time, use_ema)
+                msg!("Custom Oracle not set");
+                return err!(PerpetualsError::InvalidOraclePrice);
+            } else {
+                msg!("Price Stale");
                 return err!(PerpetualsError::InvalidOraclePrice);
             }
-    
-            let exponent = curr_expo as u32;
-    
-            let perc_diff = Self::get_price_diff(curr_price, ema_price)?;
-    
-            (min_price, max_price) = if perc_diff < oracle_params.max_difference_threshold {
-                (
-                    OraclePrice{
-                        price: curr_price,
-                        exponent: curr_expo
-                    }, 
-                    OraclePrice{
-                        price: curr_price,
-                        exponent: curr_expo
-                    },
-                )
-            } else {
-                if math::checked_div(
-                    math::checked_mul(curr_conf as u128, Perpetuals::BPS_POWER)?,
-                    curr_price as u128,
-                )? < oracle_params.max_price_error as u128 {
-                    (
-                        OraclePrice{
-                            price: math::checked_sub(curr_price, exponent as u64)?,
-                            exponent: curr_expo
-                        }, 
-                        OraclePrice{
-                            price: math::checked_add(curr_price, exponent as u64)?,
-                            exponent: curr_expo
-                        }
-                    )
-                } else { 
-                    //todo: custom oracle
-                    // Self::get_custom_price(custom_price_info, max_price_error, max_price_age_sec, current_time, use_ema)
-                    close_only = true;
-                    (OraclePrice{price: 0, exponent: 0}, OraclePrice{price: 0, exponent: 0})
-                }
-            };
         }
+
+        
         
         Ok((min_price, max_price, close_only))
     }
@@ -424,7 +404,7 @@ impl OraclePrice {
         max_price_age_sec: u32,
         current_time: i64,
         use_ema: bool,
-    ) -> Result<(u64, u64, i32)> {
+    ) -> Result<(u64, u64, i32, bool)> {
         require!(
             !Perpetuals::is_empty_account(pyth_price_info)?,
             PerpetualsError::InvalidOracleAccount
@@ -437,10 +417,12 @@ impl OraclePrice {
             price_feed.get_price_unchecked()
         };
 
+        let mut is_price_stale = false;
         let last_update_age_sec = math::checked_sub(current_time, pyth_price.publish_time)?;
         if last_update_age_sec > max_price_age_sec as i64 {
-            msg!("Error: Pyth oracle price is stale");
-            return err!(PerpetualsError::StaleOraclePrice);
+            // msg!("Error: Pyth oracle price is stale");
+            // return err!(PerpetualsError::StaleOraclePrice);
+            is_price_stale = true;
         }
 
         if pyth_price.price <= 0 {
@@ -457,7 +439,7 @@ impl OraclePrice {
         //     return err!(PerpetualsError::InvalidOraclePrice);
         // }
 
-        Ok((pyth_price.price as u64, pyth_price.conf, pyth_price.expo))
+        Ok((pyth_price.price as u64, pyth_price.conf, pyth_price.expo, is_price_stale))
     }
 }
 

@@ -117,7 +117,7 @@ pub struct AddCollateralParams {
 pub fn add_collateral(ctx: Context<AddCollateral>, params: &AddCollateralParams) -> Result<()> {
     // validate inputs
     msg!("Validate inputs");
-    if params.collateral == 0 {
+    if params.collateral >= ctx.accounts.collateral_custody.pricing.min_collateral {
         return Err(ProgramError::InvalidArgument.into());
     }
     let perpetuals = ctx.accounts.perpetuals.as_mut();

@@ -4,7 +4,7 @@ use {
     crate::{
         error::PerpetualsError,
         math,
-        state::{custody::Custody, oracle::OraclePrice, perpetuals::Perpetuals, pool::Pool},
+        state::{custody::Custody, oracle::OraclePrice, perpetuals::Perpetuals, pool::{AumCalcMode, Pool}},
     },
     anchor_lang::prelude::*,
     anchor_spl::token::{Token, TokenAccount},
@@ -146,6 +146,9 @@ pub fn swap(ctx: Context<Swap>, params: &SwapParams) -> Result<()> {
     let curtime = perpetuals.get_time()?;
     let token_id_in = pool.get_token_id(&receiving_custody.key())?;
     let token_id_out = pool.get_token_id(&dispensing_custody.key())?;
+
+    pool.aum_usd =
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, true)?;
 
     let (received_token_min_price, received_token_max_price, received_token_close_only) = OraclePrice::new_from_oracle(
         &ctx.accounts
@@ -290,6 +293,9 @@ pub fn swap(ctx: Context<Swap>, params: &SwapParams) -> Result<()> {
 
     receiving_custody.update_borrow_rate(curtime)?;
     dispensing_custody.update_borrow_rate(curtime)?;
+
+    pool.aum_usd =
+        pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, true)?;
 
     Ok(())
 }

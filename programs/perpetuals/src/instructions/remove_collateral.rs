@@ -164,15 +164,12 @@ pub fn remove_collateral(
     }
 
     // compute fee
+    let fee_amount_usd = pool.get_collateral_fee(params.collateral_usd, collateral_custody)?;
+    let fee_amount = collateral_token_min_price
+        .get_token_amount(fee_amount_usd, collateral_custody.decimals)?;
     let collateral = collateral_token_max_price
         .get_token_amount(params.collateral_usd, collateral_custody.decimals)?;
-    // let fee_amount = pool.get_remove_liquidity_fee(
-    //     token_id,
-    //     collateral,
-    //     collateral_custody,
-    //     &collateral_token_ema_price,
-    // )?;
-    // msg!("Collected fee: {}", fee_amount);
+    let updated_collateral = math::checked_sub(collateral, fee_amount)?;
 
     // compute amount to transfer
     if collateral > position.collateral_amount {
@@ -213,25 +210,22 @@ pub fn remove_collateral(
         ctx.accounts.receiving_account.to_account_info(),
         ctx.accounts.transfer_authority.to_account_info(),
         ctx.accounts.token_program.to_account_info(),
-        collateral,
+        updated_collateral,
     )?;
 
     // update custody stats
     msg!("Update custody stats");
-    // collateral_custody.collected_fees.open_position_usd = collateral_custody
-    //     .collected_fees
-    //     .open_position_usd
-    //     .wrapping_add(
-    //         collateral_token_ema_price
-    //             .get_asset_amount_usd(fee_amount, collateral_custody.decimals)?,
-    //     );
+    collateral_custody.collected_fees.close_position_usd = collateral_custody
+        .collected_fees
+        .close_position_usd
+        .wrapping_add(fee_amount_usd);
 
     collateral_custody.assets.collateral =
         math::checked_sub(collateral_custody.assets.collateral, collateral)?;
 
-    // let protocol_fee = Pool::get_fee_amount(custody.fees.protocol_share, fee_amount)?;
-    // collateral_custody.assets.protocol_fees =
-    //     math::checked_add(collateral_custody.assets.protocol_fees, protocol_fee)?;
+    let protocol_fee = Pool::get_fee_amount(custody.fees.protocol_share, fee_amount)?;
+    collateral_custody.assets.protocol_fees =
+        math::checked_add(collateral_custody.assets.protocol_fees, protocol_fee)?;
 
     // if custody and collateral_custody accounts are the same, ensure that data is in sync
     if position.side == Side::Long && !custody.is_virtual {

@@ -205,6 +205,10 @@ impl Pool {
         Self::get_fee_amount(custody.fees.close_position, size_usd)
     }
 
+    pub fn get_collateral_fee(&self, collateral_usd: u64, custody: &Custody) -> Result<u64> {
+        Self::get_fee_amount(custody.fees.remove_collateral, collateral_usd)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn get_close_amount(
         &self,
@@ -622,8 +626,13 @@ impl Pool {
                 } else {
                     *collateral_token_min_price
                 };
-                let max_profit_usd = min_collateral_price
-                    .get_asset_amount_usd(position.locked_amount, collateral_custody.decimals)?;
+                // no profit if the trade is closed in the same second
+                let max_profit_usd = if curtime <= position.open_time {
+                    0
+                } else {
+                    min_collateral_price
+                        .get_asset_amount_usd(position.locked_amount, collateral_custody.decimals)?
+                };
                 Ok((
                     std::cmp::min(max_profit_usd, cur_profit_usd),
                     0u64,
@@ -1008,7 +1017,6 @@ mod test {
             custom_oracle_account: Pubkey::default(),
             oracle_type: OracleType::Custom,
             max_difference_threshold: 300,
-            max_stable_threshold: 100,
             max_price_error: 100,
             max_price_age_sec: 1,
         };
@@ -1022,6 +1030,7 @@ mod test {
             min_initial_leverage: 10_000,
             max_initial_leverage: 100_000,
             max_leverage: 100_000,
+            min_collateral: 100_000,
             max_payoff_mult: 10_000,
             max_utilization: 0,
             max_position_locked_usd: 0,
@@ -1051,6 +1060,7 @@ mod test {
             remove_liquidity: 300,
             open_position: 100,
             close_position: 0,
+            remove_collateral: 100,
             liquidation: 50,
             protocol_share: 25,
         };
@@ -1071,6 +1081,7 @@ mod test {
             price: scale(25_000, Perpetuals::PRICE_DECIMALS),
             // x4 leverage
             size_usd: scale(100_000, Perpetuals::USD_DECIMALS),
+            borrow_size_usd: scale(100_000, Perpetuals::USD_DECIMALS),
             collateral_usd: scale(25_000, Perpetuals::USD_DECIMALS),
             locked_amount: scale(4, 9),
             collateral_amount: scale(1, 9),

@@ -142,8 +142,8 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
 
     // validate inputs
     msg!("Validate inputs");
-    if params.price == 0 || params.collateral == 0 || params.size == 0 || params.side == Side::None
-    {
+    if params.price == 0 || params.collateral >= collateral_custody.pricing.min_collateral 
+        || params.size == 0 || params.side == Side::None {
         return Err(ProgramError::InvalidArgument.into());
     }
     let use_collateral_custody = params.side == Side::Short || custody.is_virtual;
@@ -218,6 +218,16 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
         custody.get_locked_amount(params.size, params.side)?
     };
 
+    let borrow_size_usd = if custody.pricing.max_payoff_mult as u128 != Perpetuals::BPS_POWER {
+        if use_collateral_custody {
+            collateral_token_max_price.get_asset_amount_usd(locked_amount, collateral_custody.decimals)?
+        } else {
+            position_oracle_price.get_asset_amount_usd(locked_amount, custody.decimals)?
+        }
+    } else {
+        size_usd
+    };
+
     // compute fee
     let fee_amount_usd = pool.get_entry_fee(size_usd, custody)?;
 
@@ -247,6 +257,7 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
     position.side = params.side;
     position.price = position_price;
     position.size_usd = size_usd;
+    position.borrow_size_usd = borrow_size_usd;
     position.collateral_usd = collateral_usd;
     position.unrealized_profit_usd = 0;
     position.unrealized_loss_usd = 0;

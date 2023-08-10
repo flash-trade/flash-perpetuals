@@ -47,6 +47,7 @@ pub fn fees_linear_regular() -> Fees {
         remove_liquidity: 300,
         open_position: 100,
         close_position: 100,
+        remove_collateral: 100,
         liquidation: 50,
         protocol_share: 25,
     }
@@ -62,6 +63,7 @@ pub fn pricing_params_regular(use_ema: bool) -> PricingParams {
         min_initial_leverage: 10_000,
         max_initial_leverage: 100_000,
         max_leverage: 100_000,
+        min_collateral: 100_000,
         max_payoff_mult: 10_000,
         max_utilization: 0,
         max_position_locked_usd: 0,
@@ -75,7 +77,6 @@ pub fn oracle_params_regular(oracle_account: Pubkey) -> OracleParams {
         custom_oracle_account: oracle_account,
         oracle_type: OracleType::Custom,
         max_difference_threshold: 300,
-        max_stable_threshold: 100,
         max_price_error: 1_000_000,
         max_price_age_sec: 30,
     }
