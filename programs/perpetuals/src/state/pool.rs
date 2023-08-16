@@ -3,14 +3,13 @@ use {
         error::PerpetualsError,
         math,
         state::{
-            custody::{Custody, FeesMode},
+            custody::{Custody, FeesMode, FeesAction, RatioFees},
             oracle::OraclePrice,
             perpetuals::Perpetuals,
             position::{Position, Side},
         },
     },
     anchor_lang::prelude::*,
-    std::cmp::Ordering,
 };
 
 #[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Debug)]
@@ -315,9 +314,9 @@ impl Pool {
         let swap_in_fee = self.get_fee(
             token_id_in,
             if stable_swap {
-                custody_in.fees.stable_swap_in
+                FeesAction::StableSwapIn
             } else {
-                custody_in.fees.swap_in
+                FeesAction::SwapIn
             },
             amount_in,
             0u64,
@@ -328,9 +327,9 @@ impl Pool {
         let swap_out_fee = self.get_fee(
             token_id_out,
             if stable_swap {
-                custody_out.fees.stable_swap_out
+                FeesAction::StableSwapOut
             } else {
-                custody_out.fees.swap_out
+                FeesAction::SwapOut
             },
             0u64,
             amount_out,
@@ -350,7 +349,7 @@ impl Pool {
     ) -> Result<u64> {
         self.get_fee(
             token_id,
-            custody.fees.add_liquidity,
+            FeesAction::AddLiquidity,
             amount,
             0u64,
             custody,
@@ -367,7 +366,7 @@ impl Pool {
     ) -> Result<u64> {
         self.get_fee(
             token_id,
-            custody.fees.remove_liquidity,
+            FeesAction::RemoveLiquidity,
             0u64,
             amount,
             custody,
@@ -579,6 +578,7 @@ impl Pool {
             self.get_exit_fee(position.size_usd, custody)?
         };
 
+        //todo: return margin fee along with exit fee to emit
         let exit_fee = token_max_price.get_token_amount(exit_fee_usd, custody.decimals)?;
         let interest_usd = collateral_custody.get_interest_amount_usd(position, curtime)?;
         let unrealized_loss_usd = math::checked_add(
@@ -905,7 +905,7 @@ impl Pool {
     fn get_fee(
         &self,
         token_id: usize,
-        base_fee: u64,
+        action: FeesAction,
         amount_add: u64,
         amount_remove: u64,
         custody: &Custody,
@@ -913,85 +913,183 @@ impl Pool {
     ) -> Result<u64> {
         require!(!custody.is_virtual, PerpetualsError::InstructionNotAllowed);
 
+        let fees = match action {
+            FeesAction::AddLiquidity => {custody.fees.add_liquidity},
+            FeesAction::RemoveLiquidity => {custody.fees.remove_liquidity},
+            FeesAction::SwapIn => {custody.fees.swap_in},
+            FeesAction::SwapOut => {custody.fees.swap_out},
+            FeesAction::StableSwapIn => {custody.fees.stable_swap_in},
+            FeesAction::StableSwapOut => {custody.fees.stable_swap_out},
+        };
+
         if custody.fees.mode == FeesMode::Fixed {
-            return Self::get_fee_amount(base_fee, std::cmp::max(amount_add, amount_remove));
+            return Self::get_fee_amount(fees.base_rate, std::cmp::max(amount_add, amount_remove));
         }
 
-        // if token ratio is improved:
-        //    fee = base_fee / ratio_fee
-        // otherwise:
-        //    fee = base_fee * ratio_fee
-        // where:
-        //   if new_ratio < ratios.target:
-        //     ratio_fee = 1 + custody.fees.ratio_mult * (ratios.target - new_ratio) / (ratios.target - ratios.min);
-        //   otherwise:
-        //     ratio_fee = 1 + custody.fees.ratio_mult * (new_ratio - ratios.target) / (ratios.max - ratios.target);
-
         let ratios = &self.ratios[token_id];
-        let current_ratio = self.get_current_ratio(custody, token_price)?;
-        let new_ratio = self.get_new_ratio(amount_add, amount_remove, custody, token_price)?;
+        let new_ratio = self.get_new_ratio(amount_add, amount_remove, custody, token_price)?;  
 
-        let improved = match new_ratio.cmp(&ratios.target) {
-            Ordering::Less => {
-                new_ratio > current_ratio
-                    || (current_ratio > ratios.target
-                        && current_ratio - ratios.target > ratios.target - new_ratio)
-            }
-            Ordering::Greater => {
-                new_ratio < current_ratio
-                    || (current_ratio < ratios.target
-                        && ratios.target - current_ratio > new_ratio - ratios.target)
-            }
-            Ordering::Equal => current_ratio != ratios.target,
-        };
-
-        let ratio_fee = if new_ratio <= ratios.target {
-            if ratios.target == ratios.min {
-                Perpetuals::BPS_POWER
-            } else {
-                math::checked_add(
-                    Perpetuals::BPS_POWER,
-                    math::checked_div(
-                        math::checked_mul(
-                            custody.fees.ratio_mult as u128,
-                            math::checked_sub(ratios.target, new_ratio)? as u128,
-                        )?,
-                        math::checked_sub(ratios.target, ratios.min)? as u128,
-                    )?,
-                )?
-            }
-        } else if ratios.target == ratios.max {
-            Perpetuals::BPS_POWER
+        let fee = if new_ratio < ratios.target {
+            Self::calculate_ratio_fee(fees, new_ratio)?
         } else {
-            math::checked_add(
-                Perpetuals::BPS_POWER,
-                math::checked_div(
-                    math::checked_mul(
-                        custody.fees.ratio_mult as u128,
-                        math::checked_sub(new_ratio, ratios.target)? as u128,
-                    )?,
-                    math::checked_sub(ratios.max, ratios.target)? as u128,
-                )?,
-            )?
+            Self::calculate_ratio_fee(fees, new_ratio)?
         };
 
-        let fee = if improved {
-            math::checked_div(
-                math::checked_mul(base_fee as u128, Perpetuals::BPS_POWER)?,
-                ratio_fee,
-            )?
+        let mut final_fee = if fee < fees.min_fee as i64 || fee < 0 {
+            fees.min_fee 
+        } else if fee > fees.max_fee as i64 {
+            fees.max_fee
         } else {
-            math::checked_div(
-                math::checked_mul(base_fee as u128, ratio_fee)?,
-                Perpetuals::BPS_POWER,
-            )?
+            fee as u64
         };
+
+        final_fee = math::checked_as_u64(math::checked_add(final_fee, fees.base_rate)?)?;
+
+        // add extra base_rate when removing liquidity
+        if action == FeesAction::RemoveLiquidity {
+            final_fee = math::checked_add(final_fee, fees.base_rate)?;
+        }
 
         Self::get_fee_amount(
             math::checked_as_u64(fee)?,
             std::cmp::max(amount_add, amount_remove),
         )
+
     }
+
+    fn calculate_ratio_fee(
+        fees: RatioFees,
+        new_ratio: u64
+    ) -> Result<i64> {
+
+            let fee = if fees.slope1 > 0 && fees.constant1 > 0 {
+                math::checked_add(
+                    math::checked_div(
+                        math::checked_mul(fees.slope1, new_ratio as i64)?,
+                        Perpetuals::BPS_POWER as i64
+                    )?,
+                    fees.constant1
+                )?
+            } else if fees.slope1 > 0 && fees.constant1 < 0 {
+                math::checked_sub(
+                    math::checked_div(
+                        math::checked_mul(fees.slope1, new_ratio as i64)?,
+                        Perpetuals::BPS_POWER as i64
+                    )?,
+                    fees.constant1
+                )?
+            } else if fees.slope1 < 0 && fees.constant1 > 0 {
+                math::checked_sub(
+                    fees.constant1,
+                    math::checked_div(
+                        math::checked_mul(fees.slope1, new_ratio as i64)?,
+                        Perpetuals::BPS_POWER as i64
+                    )?,
+                )?
+            } else {
+                math::checked_add(
+                    math::checked_div(
+                        math::checked_mul(fees.slope1, new_ratio as i64)?,
+                        Perpetuals::BPS_POWER as i64
+                    )?,
+                    fees.constant1
+                )?
+            };
+        
+
+        Ok(fee)
+    }
+
+//     fn get_fee(
+//         &self,
+//         token_id: usize,
+//         base_fee: u64,
+//         amount_add: u64,
+//         amount_remove: u64,
+//         custody: &Custody,
+//         token_price: &OraclePrice,
+//     ) -> Result<u64> {
+//         require!(!custody.is_virtual, PerpetualsError::InstructionNotAllowed);
+
+//         if custody.fees.mode == FeesMode::Fixed {
+//             return Self::get_fee_amount(base_fee, std::cmp::max(amount_add, amount_remove));
+//         }
+
+//         // if token ratio is improved:
+//         //    fee = base_fee / ratio_fee
+//         // otherwise:
+//         //    fee = base_fee * ratio_fee
+//         // where:
+//         //   if new_ratio < ratios.target:
+//         //     ratio_fee = 1 + custody.fees.ratio_mult * (ratios.target - new_ratio) / (ratios.target - ratios.min);
+//         //   otherwise:
+//         //     ratio_fee = 1 + custody.fees.ratio_mult * (new_ratio - ratios.target) / (ratios.max - ratios.target);
+
+//         let ratios = &self.ratios[token_id];
+//         let current_ratio = self.get_current_ratio(custody, token_price)?;
+//         let new_ratio = self.get_new_ratio(amount_add, amount_remove, custody, token_price)?;
+
+//         let improved = match new_ratio.cmp(&ratios.target) {
+//             Ordering::Less => {
+//                 new_ratio > current_ratio
+//                     || (current_ratio > ratios.target
+//                         && current_ratio - ratios.target > ratios.target - new_ratio)
+//             }
+//             Ordering::Greater => {
+//                 new_ratio < current_ratio
+//                     || (current_ratio < ratios.target
+//                         && ratios.target - current_ratio > new_ratio - ratios.target)
+//             }
+//             Ordering::Equal => current_ratio != ratios.target,
+//         };
+
+//         let ratio_fee = if new_ratio <= ratios.target {
+//             if ratios.target == ratios.min {
+//                 Perpetuals::BPS_POWER
+//             } else {
+//                 math::checked_add(
+//                     Perpetuals::BPS_POWER,
+//                     math::checked_div(
+//                         math::checked_mul(
+//                             custody.fees.ratio_mult as u128,
+//                             math::checked_sub(ratios.target, new_ratio)? as u128,
+//                         )?,
+//                         math::checked_sub(ratios.target, ratios.min)? as u128,
+//                     )?,
+//                 )?
+//             }
+//         } else if ratios.target == ratios.max {
+//             Perpetuals::BPS_POWER
+//         } else {
+//             math::checked_add(
+//                 Perpetuals::BPS_POWER,
+//                 math::checked_div(
+//                     math::checked_mul(
+//                         custody.fees.ratio_mult as u128,
+//                         math::checked_sub(new_ratio, ratios.target)? as u128,
+//                     )?,
+//                     math::checked_sub(ratios.max, ratios.target)? as u128,
+//                 )?,
+//             )?
+//         };
+
+//         let fee = if improved {
+//             math::checked_div(
+//                 math::checked_mul(base_fee as u128, Perpetuals::BPS_POWER)?,
+//                 ratio_fee,
+//             )?
+//         } else {
+//             math::checked_div(
+//                 math::checked_mul(base_fee as u128, ratio_fee)?,
+//                 Perpetuals::BPS_POWER,
+//             )?
+//         };
+
+//         Self::get_fee_amount(
+//             math::checked_as_u64(fee)?,
+//             std::cmp::max(amount_add, amount_remove),
+//         )
+//     }
 }
 
 #[cfg(test)]
@@ -1048,16 +1146,76 @@ mod test {
             allow_size_change: true,
         };
 
+        let swap_in = RatioFees { //todo:
+            base_rate: 2,
+            slope1: 57,
+            constant1: -5,
+            slope2: 27,
+            constant2: 1,
+            min_fee: 0,
+            max_fee: 15,
+        };
+
+        let swap_out = RatioFees { //todo:
+            base_rate: 100,
+            slope1: 100,
+            constant1: 100,
+            slope2: 100,
+            constant2: 100,
+            min_fee: 100,
+            max_fee: 100,
+        };
+
+        let stable_swap_in = RatioFees { //todo:
+            base_rate: 100,
+            slope1: 100,
+            constant1: 100,
+            slope2: 100,
+            constant2: 100,
+            min_fee: 100,
+            max_fee: 100,
+        };
+
+        let stable_swap_out = RatioFees { //todo:
+            base_rate: 100,
+            slope1: 100,
+            constant1: 100,
+            slope2: 100,
+            constant2: 100,
+            min_fee: 100,
+            max_fee: 100,
+        };
+
+        let add_liquidity = RatioFees { //todo:
+            base_rate: 100,
+            slope1: 100,
+            constant1: 100,
+            slope2: 100,
+            constant2: 100,
+            min_fee: 100,
+            max_fee: 100,
+        };
+
+        let remove_liquidity = RatioFees { //todo:
+            base_rate: 100,
+            slope1: 100,
+            constant1: 100,
+            slope2: 100,
+            constant2: 100,
+            min_fee: 100,
+            max_fee: 100,
+        };
+
         let fees = Fees {
             mode: FeesMode::Linear,
             ratio_mult: 20_000,
             utilization_mult: 20_000,
-            swap_in: 100,
-            swap_out: 100,
-            stable_swap_in: 100,
-            stable_swap_out: 100,
-            add_liquidity: 200,
-            remove_liquidity: 300,
+            swap_in: swap_in,
+            swap_out: swap_out,
+            stable_swap_in: stable_swap_in,
+            stable_swap_out: stable_swap_out,
+            add_liquidity: add_liquidity,
+            remove_liquidity: remove_liquidity,
             open_position: 100,
             close_position: 0,
             remove_collateral: 100,
@@ -1392,8 +1550,8 @@ mod test {
             scale_f64(0.2, custody.decimals),
             pool.get_fee(
                 0,
-                custody.fees.swap_in,
-                scale(20, custody.decimals),
+                FeesAction::SwapIn,
+                scale(1000, custody.decimals),
                 0,
                 &custody,
                 &token_price
@@ -1416,7 +1574,7 @@ mod test {
             97_000_000,
             pool.get_fee(
                 0,
-                custody.fees.swap_in,
+                FeesAction::SwapIn,
                 scale(5, custody.decimals),
                 0,
                 &custody,
@@ -1430,7 +1588,7 @@ mod test {
             13_600_000,
             pool.get_fee(
                 0,
-                custody.fees.swap_in,
+                FeesAction::SwapIn,
                 0,
                 scale(2, custody.decimals),
                 &custody,
@@ -1444,7 +1602,7 @@ mod test {
             60_000_000,
             pool.get_fee(
                 0,
-                custody.fees.swap_in,
+                FeesAction::SwapIn,
                 0,
                 scale(6, custody.decimals),
                 &custody,
@@ -1461,7 +1619,7 @@ mod test {
             30_500_000,
             pool.get_fee(
                 0,
-                custody.fees.swap_in,
+                FeesAction::SwapIn,
                 scale(5, custody.decimals),
                 0,
                 &custody,
@@ -1475,7 +1633,7 @@ mod test {
             116_500_000,
             pool.get_fee(
                 0,
-                custody.fees.swap_in,
+                FeesAction::SwapIn,
                 0,
                 scale(5, custody.decimals),
                 &custody,
@@ -1489,7 +1647,7 @@ mod test {
             180_000_000,
             pool.get_fee(
                 0,
-                custody.fees.swap_in,
+                FeesAction::SwapIn,
                 scale(18, custody.decimals),
                 0,
                 &custody,

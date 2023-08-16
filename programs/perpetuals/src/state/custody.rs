@@ -17,23 +17,44 @@ pub enum FeesMode {
     Linear,
 }
 
+#[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Debug)]
+pub enum FeesAction {
+    AddLiquidity,
+    RemoveLiquidity,
+    SwapIn,
+    SwapOut,
+    StableSwapIn,
+    StableSwapOut,
+}
+
 #[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Default, Debug)]
 pub struct Fees {
     pub mode: FeesMode,
     // fees have implied BPS_DECIMALS decimals
     pub ratio_mult: u64,
     pub utilization_mult: u64,
-    pub swap_in: u64,
-    pub swap_out: u64,
-    pub stable_swap_in: u64,
-    pub stable_swap_out: u64,
-    pub add_liquidity: u64,
-    pub remove_liquidity: u64,
+    pub swap_in: RatioFees,
+    pub swap_out: RatioFees,
+    pub stable_swap_in: RatioFees,
+    pub stable_swap_out: RatioFees,
+    pub add_liquidity: RatioFees,
+    pub remove_liquidity: RatioFees,
     pub open_position: u64,
     pub close_position: u64,
     pub remove_collateral: u64,
     pub liquidation: u64,
     pub protocol_share: u64,
+}
+
+#[derive(Copy, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, Default, Debug)]
+pub struct RatioFees {
+    pub base_rate: u64,
+    pub slope1: i64,
+    pub constant1: i64,
+    pub slope2: i64,
+    pub constant2: i64,
+    pub min_fee: u64,
+    pub max_fee: u64
 }
 
  
@@ -211,16 +232,28 @@ impl Default for FeesMode {
 
 impl Fees {
     pub fn validate(&self) -> bool {
-        self.swap_in as u128 <= Perpetuals::BPS_POWER
-            && self.swap_out as u128 <= Perpetuals::BPS_POWER
-            && self.stable_swap_in as u128 <= Perpetuals::BPS_POWER
-            && self.stable_swap_out as u128 <= Perpetuals::BPS_POWER
-            && self.add_liquidity as u128 <= Perpetuals::BPS_POWER
-            && self.remove_liquidity as u128 <= Perpetuals::BPS_POWER
+        self.swap_in.validate()
+            && self.swap_out.validate()
+            && self.stable_swap_in.validate()
+            && self.stable_swap_out.validate()
+            && self.add_liquidity.validate()
+            && self.remove_liquidity.validate()
             && self.open_position as u128 <= Perpetuals::BPS_POWER
             && self.close_position as u128 <= Perpetuals::BPS_POWER
             && self.liquidation as u128 <= Perpetuals::BPS_POWER
             && self.protocol_share as u128 <= Perpetuals::BPS_POWER
+    }
+}
+
+impl RatioFees {
+    pub fn validate(&self) -> bool {
+        self.base_rate as u128 <= Perpetuals::BPS_POWER
+            && self.slope1 as u128 <= Perpetuals::BPS_POWER
+            && self.constant1 as u128 <= Perpetuals::BPS_POWER
+            && self.slope2 as u128 <= Perpetuals::BPS_POWER
+            && self.constant2 as u128 <= Perpetuals::BPS_POWER
+            && self.min_fee as u128 <= Perpetuals::BPS_POWER
+            && self.max_fee as u128 <= Perpetuals::BPS_POWER
     }
 }
 

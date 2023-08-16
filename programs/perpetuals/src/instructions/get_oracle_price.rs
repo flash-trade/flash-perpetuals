@@ -41,13 +41,11 @@ pub struct GetOraclePrice<'info> {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
-pub struct GetOraclePriceParams {
-    ema: bool,
-}
+pub struct GetOraclePriceParams {}
 
 pub fn get_oracle_price(
     ctx: Context<GetOraclePrice>,
-    params: &GetOraclePriceParams,
+    _params: &GetOraclePriceParams,
 ) -> Result<(u64, u64)> {
     let custody = &ctx.accounts.custody;
     let curtime = ctx.accounts.perpetuals.get_time()?;

@@ -119,14 +119,14 @@ pub fn get_entry_price_and_fee(
     let collateral_usd = collateral_token_min_price
         .get_asset_amount_usd(params.collateral, collateral_custody.decimals)?;
 
-    let locked_amount = if params.side == Side::Short || custody.is_virtual {
-        custody.get_locked_amount(
-            collateral_token_min_price.get_token_amount(size_usd, collateral_custody.decimals)?,
-            params.side,
-        )?
-    } else {
-        custody.get_locked_amount(params.size, params.side)?
-    };
+    // let locked_amount = if params.side == Side::Short || custody.is_virtual {
+    //     custody.get_locked_amount(
+    //         collateral_token_min_price.get_token_amount(size_usd, collateral_custody.decimals)?,
+    //         params.side,
+    //     )?
+    // } else {
+    //     custody.get_locked_amount(params.size, params.side)?
+    // };
 
     let position = Position {
         side: params.side,
