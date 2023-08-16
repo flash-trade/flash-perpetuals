@@ -72,6 +72,7 @@ pub struct RemoveLiquidity<'info> {
     )]
     pub custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the returned token
     #[account(
         constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
     )]
@@ -137,7 +138,7 @@ pub fn remove_liquidity(
     pool.aum_usd =
         pool.get_assets_under_management_usd(AumCalcMode::Max, ctx.remaining_accounts, curtime, false)?;
 
-    let (_token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
+    let (token_min_price, token_max_price, _) = OraclePrice::new_from_oracle(
         &ctx.accounts.custody_oracle_account.to_account_info(),
         &custody.oracle,
         curtime,
@@ -154,7 +155,24 @@ pub fn remove_liquidity(
         ctx.accounts.lp_token_mint.supply as u128,
     )?)?;
 
-    let remove_amount = token_max_price.get_token_amount(remove_amount_usd, custody.decimals)?;
+    let remove_amount;
+    if !custody.is_stable && token_min_price == token_max_price {
+        remove_amount = token_max_price.get_token_amount(remove_amount_usd, custody.decimals)?;
+    } else {
+        let one_usd = OraclePrice::get_one_usd(
+            &ctx.accounts.custody_oracle_account.to_account_info(),
+            &custody.oracle,
+            curtime,
+        )?;
+
+        if token_max_price.price < one_usd.price {
+            remove_amount = one_usd.get_token_amount(remove_amount_usd, custody.decimals)?;
+        } else {
+            remove_amount = token_max_price.get_token_amount(remove_amount_usd, custody.decimals)?;
+        }
+    };
+
+    
 
     // calculate fee
     let fee_amount =

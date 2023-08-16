@@ -67,6 +67,7 @@ pub struct Swap<'info> {
     )]
     pub receiving_custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the received token
     #[account(
         constraint = receiving_custody_custom_oracle_account.key() == receiving_custody.oracle.custom_oracle_account
     )]
@@ -96,6 +97,7 @@ pub struct Swap<'info> {
     )]
     pub dispensing_custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the returned token
     #[account(
         constraint = dispensing_custody_custom_oracle_account.key() == dispensing_custody.oracle.custom_oracle_account
     )]

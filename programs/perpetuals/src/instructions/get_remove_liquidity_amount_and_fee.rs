@@ -38,12 +38,13 @@ pub struct GetRemoveLiquidityAmountAndFee<'info> {
     )]
     pub custody: Box<Account<'info, Custody>>,
 
+    /// CHECK: oracle account for the token
     #[account(
         constraint = custody_oracle_account.key() == custody.oracle.oracle_account
     )]
     pub custody_oracle_account: AccountInfo<'info>,
 
-
+    /// CHECK: oracle account for the token
     #[account(
         constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
     )]

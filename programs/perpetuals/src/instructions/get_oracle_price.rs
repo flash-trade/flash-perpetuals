@@ -34,6 +34,7 @@ pub struct GetOraclePrice<'info> {
     )]
     pub custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the collateral token
     #[account(
         constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
     )]

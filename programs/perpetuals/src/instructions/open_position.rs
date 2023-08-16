@@ -81,10 +81,11 @@ pub struct OpenPosition<'info> {
 
     /// CHECK: oracle account for the position token
     #[account(
-        constraint = custody_oracle_account.key() == custody.oracle.oracle_account
+        constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
     )]
     pub custody_custom_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the position token
     #[account(
         mut,
         seeds = [b"custody",
@@ -100,9 +101,9 @@ pub struct OpenPosition<'info> {
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
 
-    /// CHECK: oracle account for the position token
+    /// CHECK: oracle account for the collateral token
     #[account(
-        constraint = custody_oracle_account.key() == custody.oracle.oracle_account
+        constraint = collateral_custody_custom_oracle_account.key() == collateral_custody.oracle.custom_oracle_account
     )]
     pub collateral_custody_custom_oracle_account: AccountInfo<'info>,
 

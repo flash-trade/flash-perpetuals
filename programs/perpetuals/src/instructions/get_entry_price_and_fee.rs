@@ -41,6 +41,7 @@ pub struct GetEntryPriceAndFee<'info> {
     )]
     pub custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the collateral token
     #[account(
         constraint = custody_custom_oracle_account.key() == custody.oracle.custom_oracle_account
     )]
@@ -60,6 +61,7 @@ pub struct GetEntryPriceAndFee<'info> {
     )]
     pub collateral_custody_oracle_account: AccountInfo<'info>,
 
+    /// CHECK: oracle account for the collateral token
     #[account(
         constraint = collateral_custody_custom_oracle_account.key() == collateral_custody.oracle.custom_oracle_account
     )]
