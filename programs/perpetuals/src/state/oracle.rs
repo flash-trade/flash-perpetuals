@@ -97,7 +97,6 @@ impl OraclePrice {
 
         let (curr_price, curr_conf, curr_expo, is_price_stale) = Self::get_pyth_price(
             oracle_account,
-            oracle_params.max_price_error,
             oracle_params.max_price_age_sec,
             current_time,
             false
@@ -116,16 +115,15 @@ impl OraclePrice {
                         OraclePrice{price: curr_price, exponent: curr_expo},
                     )
                 } else {
-                    if curr_price < one_usd {
+                    if curr_conf <= curr_price {
                         (
-                            OraclePrice{price: curr_price, exponent: curr_expo}, 
-                            OraclePrice{price: one_usd, exponent: curr_expo},
-                        )
-                    } else {
-                        (
-                            OraclePrice{price: one_usd, exponent: curr_expo}, 
+                            OraclePrice{price: math::checked_sub(curr_price, curr_conf)?, exponent: curr_expo}, 
                             OraclePrice{price: curr_price, exponent: curr_expo},
                         )
+                    } else {
+                        // Self::get_custom_price(custom_price_info, max_price_error, max_price_age_sec, current_time, use_ema)
+                        msg!("Custom Oracle not set");
+                        return err!(PerpetualsError::InvalidOraclePrice);
                     }
                 }
 
@@ -133,7 +131,6 @@ impl OraclePrice {
         
                 let (ema_price, _, _, _) = Self::get_pyth_price(
                     oracle_account,
-                    oracle_params.max_price_error,
                     oracle_params.max_price_age_sec,
                     current_time,
                     true
@@ -153,7 +150,7 @@ impl OraclePrice {
                     )? < oracle_params.max_price_error as u128 {
                         (
                             OraclePrice{price: math::checked_sub(curr_price, curr_conf)?, exponent: curr_expo}, 
-                            OraclePrice{price: math::checked_add(curr_price, curr_conf)?, exponent: curr_expo}
+                            OraclePrice{price: curr_price, exponent: curr_expo}
                         )
                     } else { 
                         
@@ -166,7 +163,7 @@ impl OraclePrice {
                         } else {
                             (
                                 OraclePrice{price: math::checked_sub(curr_price, curr_conf)?, exponent: curr_expo}, 
-                                OraclePrice{price: math::checked_add(curr_price, curr_conf)?, exponent: curr_expo}
+                                OraclePrice{price: curr_price, exponent: curr_expo}
                             )
                         }
                     }
@@ -188,6 +185,21 @@ impl OraclePrice {
         
         
         Ok((min_price, max_price, close_only))
+    }
+
+    pub fn get_one_usd(
+        oracle_account: &AccountInfo,
+        oracle_params: &OracleParams,
+        current_time: i64
+    ) -> Result<OraclePrice> {
+        let (_, _, expo, _) = Self::get_pyth_price(oracle_account,
+            oracle_params.max_price_age_sec,
+            current_time,
+            false
+        )?;
+
+        let one_usd = math::checked_pow(10u64, (-expo) as usize)?;
+        Ok(OraclePrice{price: one_usd, exponent: expo})
     }
 
     fn get_price_diff(price1: u64, price2: u64) -> Result<u64> {
@@ -400,7 +412,6 @@ impl OraclePrice {
 
     fn get_pyth_price(
         pyth_price_info: &AccountInfo,
-        _max_price_error: u64,
         max_price_age_sec: u32,
         current_time: i64,
         use_ema: bool,
