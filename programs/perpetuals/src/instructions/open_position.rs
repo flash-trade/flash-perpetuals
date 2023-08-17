@@ -143,7 +143,7 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
 
     // validate inputs
     msg!("Validate inputs");
-    if params.price == 0 || params.collateral >= collateral_custody.pricing.min_collateral 
+    if params.price == 0 || params.collateral >= collateral_custody.pricing.min_collateral_usd 
         || params.size == 0 || params.side == Side::None {
         return Err(ProgramError::InvalidArgument.into());
     }

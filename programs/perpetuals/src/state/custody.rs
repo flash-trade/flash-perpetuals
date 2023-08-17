@@ -111,7 +111,7 @@ pub struct PricingParams {
     pub min_initial_leverage: u64,
     pub max_initial_leverage: u64,
     pub max_leverage: u64,
-    pub min_collateral: u64,
+    pub min_collateral_usd: u64,
     // max_user_profit = position_size * max_payoff_mult
     pub max_payoff_mult: u64,
     pub max_utilization: u64,
@@ -248,10 +248,14 @@ impl Fees {
 impl RatioFees {
     pub fn validate(&self) -> bool {
         self.base_rate as u128 <= Perpetuals::BPS_POWER
-            && self.slope1 as u128 <= Perpetuals::BPS_POWER
-            && self.constant1 as u128 <= Perpetuals::BPS_POWER
-            && self.slope2 as u128 <= Perpetuals::BPS_POWER
+            && self.slope1 <= Perpetuals::BPS_POWER as i64
+            && self.slope1 >= ((Perpetuals::BPS_POWER as i64) * -1)
+            && self.constant1 <= Perpetuals::BPS_POWER as i64
+            && self.constant1 >= ((Perpetuals::BPS_POWER as i64) * -1)
+            && self.slope2 <= Perpetuals::BPS_POWER as i64
+            && self.slope2 >= ((Perpetuals::BPS_POWER as i64) * -1)
             && self.constant2 as u128 <= Perpetuals::BPS_POWER
+            && self.constant2 >= ((Perpetuals::BPS_POWER as i64) * -1)
             && self.min_fee as u128 <= Perpetuals::BPS_POWER
             && self.max_fee as u128 <= Perpetuals::BPS_POWER
     }
