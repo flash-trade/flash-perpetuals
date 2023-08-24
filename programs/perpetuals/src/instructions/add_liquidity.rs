@@ -124,6 +124,9 @@ pub fn add_liquidity(ctx: Context<AddLiquidity>, params: &AddLiquidityParams) ->
     // calculate fee
     let curtime = perpetuals.get_time()?;
 
+    msg!(" log 00 : {:?}" , ctx.remaining_accounts.len());
+    // msg!(" accs 00 : {:?}" , ctx.remaining_accounts);
+
     // Refresh pool.aum_usm to adapt to token price change
     pool.aum_usd =
         pool.get_assets_under_management_usd(AumCalcMode::EMA, ctx.remaining_accounts, curtime)?;

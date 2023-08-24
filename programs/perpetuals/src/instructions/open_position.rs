@@ -367,6 +367,6 @@ pub fn open_position(ctx: Context<OpenPosition>, params: &OpenPositionParams) ->
         )?;
         collateral_custody.update_borrow_rate(curtime)?;
     }
-
+    
     Ok(())
 }

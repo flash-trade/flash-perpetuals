@@ -183,15 +183,35 @@ describe("perpetuals", () => {
     };
     ratios = [
       {
-        target: new BN(5000),
+        target: new BN(2000),
         min: new BN(10),
         max: new BN(10000),
       },
       {
-        target: new BN(5000),
+        target: new BN(2000),
         min: new BN(10),
         max: new BN(10000),
       },
+      {
+        target: new BN(2000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(1000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(1000),
+        min: new BN(10),
+        max: new BN(10000),
+      }
     ];
     let ratios1 = [
       {
@@ -202,6 +222,8 @@ describe("perpetuals", () => {
     ];
     isStable = false;
     isVirtual = false;
+
+    // add 1
     await tc.addCustody(
       tc.custodies[0],
       isStable,
@@ -333,7 +355,22 @@ describe("perpetuals", () => {
     };
     expect(JSON.stringify(token)).to.equal(JSON.stringify(tokenExpected));
 
+    console.log("----- 1 done  ")
+
+    let ratios2 = [
+      {
+        target: new BN(5000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(5000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+    ];
     let oracleConfig2 = Object.assign({}, oracleConfig);
+    // add 2
     oracleConfig2.oracleAccount = tc.custodies[1].oracleAccount;
     await tc.addCustody(
       tc.custodies[1],
@@ -344,12 +381,17 @@ describe("perpetuals", () => {
       permissions,
       fees,
       borrowRate,
-      ratios
+      ratios2
     );
+    console.log("----- 2 done  ")
 
+
+    // remove 
     await tc.removeCustody(tc.custodies[1], ratios1);
     tc.ensureFails(tc.program.account.custody.fetch(tc.custodies[1].custody));
+    console.log("----- 2 remove done  ")
 
+    // add back 2  
     await tc.addCustody(
       tc.custodies[1],
       isStable,
@@ -359,15 +401,167 @@ describe("perpetuals", () => {
       permissions,
       fees,
       borrowRate,
+      ratios2
+    );
+    console.log("----- 2 added again done  ")
+
+
+
+
+    let oracleConfig3 = {
+      maxPriceError: new BN(10000),
+      maxPriceAgeSec: 60,
+      oracleType: { custom: {} },
+      oracleAccount: tc.custodies[2].oracleAccount,
+    };
+    let ratios3 = [
+      {
+        target: new BN(2500),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2500),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(5000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+    ];
+    console.log("---- 2 ")
+
+    await tc.addCustody(
+      tc.custodies[2],
+      false,
+      false,
+      oracleConfig3,
+      pricing,
+      permissions,
+      fees,
+      borrowRate,
+      ratios3
+    );
+
+    let oracleConfig4 = {
+      maxPriceError: new BN(10000),
+      maxPriceAgeSec: 60,
+      oracleType: { custom: {} },
+      oracleAccount: tc.custodies[3].oracleAccount,
+    };
+    let ratios4 = [
+      {
+        target: new BN(2500),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2500),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2500),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2500),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+    ];
+    
+    console.log("---- index 3 : custody 4 start ")
+    await tc.addCustody(
+      tc.custodies[3],
+      false,
+      false,
+      oracleConfig4,
+      pricing,
+      permissions,
+      fees,
+      borrowRate,
+      ratios4
+    );
+
+    let oracleConfig5 = {
+      maxPriceError: new BN(10000),
+      maxPriceAgeSec: 60,
+      oracleType: { custom: {} },
+      oracleAccount: tc.custodies[4].oracleAccount,
+    };
+    let ratios5 = [
+      {
+        target: new BN(2000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+      {
+        target: new BN(2000),
+        min: new BN(10),
+        max: new BN(10000),
+      },
+    ];
+    console.log("---- 4 ")
+    await tc.addCustody(
+      tc.custodies[4],
+      false,
+      false,
+      oracleConfig5,
+      pricing,
+      permissions,
+      fees,
+      borrowRate,
+      ratios5
+    );
+    let oracleConfig6 = {
+      maxPriceError: new BN(10000),
+      maxPriceAgeSec: 60,
+      oracleType: { custom: {} },
+      oracleAccount: tc.custodies[5].oracleAccount,
+    };
+    
+    console.log("---- 5 ")
+    await tc.addCustody(
+      tc.custodies[5],
+      false,
+      false,
+      oracleConfig6,
+      pricing,
+      permissions,
+      fees,
+      borrowRate,
       ratios
     );
+
+
+    console.log("pool : ", await tc.program.account.pool.fetch(tc.pool.publicKey));
+
   });
 
   it("setCustodyConfig", async () => {
     oracleConfig.maxPriceAgeSec = 90;
     permissions.allowPnlWithdrawal = false;
     fees.liquidation = new BN(200);
-    ratios[0].min = new BN(90);
+    // ratios[0].min = new BN(90);
     await tc.setCustodyConfig(
       tc.custodies[0],
       isStable,
@@ -390,6 +584,10 @@ describe("perpetuals", () => {
   it("setCustomOraclePrice", async () => {
     await tc.setCustomOraclePrice(123, tc.custodies[0]);
     await tc.setCustomOraclePrice(200, tc.custodies[1]);
+    await tc.setCustomOraclePrice(200, tc.custodies[2]);
+    await tc.setCustomOraclePrice(200, tc.custodies[3]);
+    await tc.setCustomOraclePrice(200, tc.custodies[4]);
+    await tc.setCustomOraclePrice(200, tc.custodies[5]);
 
     let oracle = await tc.program.account.customOracle.fetch(
       tc.custodies[0].oracleAccount
@@ -416,6 +614,7 @@ describe("perpetuals", () => {
   });
 
   it("addLiquidity", async () => {
+
     await tc.addLiquidity(
       tc.toTokenAmount(10, tc.custodies[0].decimals),
       new BN(1),

@@ -89,6 +89,11 @@ export class TestClient {
     this.custodies = [];
     this.custodies.push(this.generateCustody(9));
     this.custodies.push(this.generateCustody(6));
+    this.custodies.push(this.generateCustody(6));
+    this.custodies.push(this.generateCustody(6));
+    this.custodies.push(this.generateCustody(6));
+    this.custodies.push(this.generateCustody(6));
+
 
     this.custodyMetas = [];
     for (const custody of this.custodies) {
@@ -773,6 +778,10 @@ export class TestClient {
     custody
   ) => {
     try {
+    console.log("inside add Liq remainng acc len: ",this.custodyMetas.length)
+
+    // console.log("inside add Liq remainng acc : ",this.custodyMetas)
+
       await this.program.methods
         .addLiquidity({
           amountIn,
